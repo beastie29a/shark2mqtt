@@ -346,12 +346,16 @@ class SharkAuth:
     def _find_chromium() -> str | None:
         """Find the full Chromium binary (not headless shell)."""
         import glob
-        patterns = [
+        browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+        patterns = []
+        if browsers_path:
+            patterns.append(f"{browsers_path}/chromium-*/chrome-linux*/chrome")
+        patterns.extend([
             os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
             "/usr/bin/chromium",
             "/usr/bin/chromium-browser",
             "/usr/bin/google-chrome",
-        ]
+        ])
         for pattern in patterns:
             matches = glob.glob(pattern)
             if matches:

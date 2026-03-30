@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Create non-root user and data directory early so Chromium installs to the right path
+# Create non-root user and data directory
 RUN useradd -m shark \
     && mkdir -p /data \
     && chown -R shark:shark /app /data
@@ -35,14 +35,17 @@ RUN useradd -m shark \
 COPY --chown=shark:shark requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Patchright Chromium browser as the shark user
-USER shark
-RUN patchright install chromium
+# Install Patchright Chromium browser to a fixed path accessible by any user
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
+RUN mkdir -p /opt/browsers \
+    && patchright install chromium \
+    && chmod -R o+rX /opt/browsers
 
 COPY --chown=shark:shark src/ ./src/
 
+USER shark
 ENV PYTHONUNBUFFERED=1
 
 # Start Xvfb in the background and run the app directly.
 # A virtual display is needed for headed Chromium to bypass Cloudflare Turnstile.
-ENTRYPOINT ["/bin/sh", "-c", "Xvfb :99 -screen 0 1024x768x16 &\nexport DISPLAY=:99\nexec python -m src.main \"$@\"", "--"]
+ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1024x768x16 &\nexport DISPLAY=:99\nexec python -m src.main \"$@\"", "--"]
