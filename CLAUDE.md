@@ -21,6 +21,10 @@ Standalone Python service bridging SharkNinja robot vacuums to Home Assistant vi
 
 **Per-model clean commands**: Devices with `AreasToClean_V3` in their shadow (e.g., UR2360EEUS) use the V3 dict format. Devices without it (e.g., UR250BEXUS) use `Areas_To_Clean` with list format (`["Mode:Room"]`) plus `Operating_Mode: 2`. Detected automatically from shadow properties.
 
+## Releases
+
+Local git tags may be stale. When tagging a release, always check GitHub for the latest tag (e.g., `gh api repos/CamSoper/shark2mqtt/tags --jq '.[0].name'`) before determining the next version number.
+
 ## If Message Signing Starts Being Enforced
 
 `@CamSoper` has notes. Ask him for them.
