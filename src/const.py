@@ -16,6 +16,8 @@ class RegionConfig:
     ayla_device_url: str
     ayla_app_id: str
     ayla_app_secret: str
+    skegox_base: str
+    skegox_api_key: str
 
 
 REGIONS: dict[str, RegionConfig] = {
@@ -28,6 +30,8 @@ REGIONS: dict[str, RegionConfig] = {
         ayla_device_url="https://ads-sharkue1.aylanetworks.com",
         ayla_app_id="ios_shark_prod-3A-id",
         ayla_app_secret="ios_shark_prod-74tFWGNg34LQCmR0m45SsThqrqs",
+        skegox_base="https://stakra.slatra.thor.skegox.com",
+        skegox_api_key="QQdbSrgicK2PxvACI1a2P5AN2xgO78Lw1VvnYczb",
     ),
     "eu": RegionConfig(
         auth0_url="https://logineu.sharkninja.com",
@@ -38,6 +42,8 @@ REGIONS: dict[str, RegionConfig] = {
         ayla_device_url="https://ads-eu.aylanetworks.com",
         ayla_app_id="android_shark_prod-lg-id",
         ayla_app_secret="android_shark_prod-xuf9mlHOo0p3Ty5bboFROSyRBlE",
+        skegox_base="https://stakra.rannsaka.thor.skegox.com",
+        skegox_api_key="QQdbSrgicK2PxvACI1a2P5AN2xgO78Lw1VvnYczb",
     ),
 }
 

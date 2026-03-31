@@ -25,8 +25,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SKEGOX_BASE = "https://stakra.slatra.thor.skegox.com"
-SKEGOX_API_KEY = "QQdbSrgicK2PxvACI1a2P5AN2xgO78Lw1VvnYczb"
 SKEGOX_CALLER = "ENDUSER_MOBILEAPP"
 
 
@@ -36,6 +34,7 @@ class SkegoxApi:
     def __init__(self, config: Settings, auth: SharkAuth) -> None:
         self._config = config
         self._auth = auth
+        self._region = REGIONS[config.shark_region]
         self._session: aiohttp.ClientSession | None = None
         self._household_id: str | None = None
         self._user_id: str | None = None
@@ -56,7 +55,7 @@ class SkegoxApi:
         return {
             "Authorization": f"Bearer {self._auth.id_token}",
             "content-type": "application/json",
-            "x-api-key": SKEGOX_API_KEY,
+            "x-api-key": self._region.skegox_api_key,
             "x-iotn-request-signature": (
                 f"SN-HMAC-SHA256 Credential=x/{now}/*/end-user-api/sn_request, "
                 f"SignedHeaders=host;x-sn-date;x-sn-nonce, "
@@ -70,7 +69,7 @@ class SkegoxApi:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         """Make an authenticated request to the skegox API."""
         session = await self._get_session()
-        url = f"{SKEGOX_BASE}{path}"
+        url = f"{self._region.skegox_base}{path}"
         headers = self._headers()
 
         async with session.request(method, url, headers=headers, **kwargs) as resp:
@@ -93,6 +92,7 @@ class SkegoxApi:
 
     async def discover(self) -> None:
         """Discover user ID from JWT and household ID from skegox API."""
+        logger.info("Using skegox endpoint: %s", self._region.skegox_base)
         import base64
         token = self._auth.id_token
         if not token:
@@ -127,7 +127,6 @@ class SkegoxApi:
         Returns the household ID if found, or None.
         """
         # Get a SND from Ayla
-        region = REGIONS[self._config.shark_region]
         session = await self._get_session()
         id_token = self._auth.id_token
         if not id_token:
@@ -135,10 +134,10 @@ class SkegoxApi:
 
         try:
             async with session.post(
-                f"{region.ayla_login_url}/api/v1/token_sign_in",
+                f"{self._region.ayla_login_url}/api/v1/token_sign_in",
                 json={
-                    "app_id": region.ayla_app_id,
-                    "app_secret": region.ayla_app_secret,
+                    "app_id": self._region.ayla_app_id,
+                    "app_secret": self._region.ayla_app_secret,
                     "token": id_token,
                 },
             ) as resp:
@@ -149,7 +148,7 @@ class SkegoxApi:
             ayla_headers = {"Authorization": f"auth_token {ayla_data['access_token']}"}
 
             async with session.get(
-                f"{region.ayla_device_url}/apiv1/devices.json",
+                f"{self._region.ayla_device_url}/apiv1/devices.json",
                 headers=ayla_headers,
             ) as resp:
                 devices = await resp.json()
@@ -159,7 +158,7 @@ class SkegoxApi:
                 dev = d.get("device", {})
                 dsn = dev.get("dsn", "")
                 async with session.get(
-                    f"{region.ayla_device_url}/apiv1/dsns/{dsn}/properties.json",
+                    f"{self._region.ayla_device_url}/apiv1/dsns/{dsn}/properties.json",
                     headers=ayla_headers,
                 ) as resp:
                     if resp.status >= 300:
@@ -232,7 +231,6 @@ class SkegoxApi:
         Used when skegox Robot_Room_List is empty (rooms configured before
         skegox migration).
         """
-        region = REGIONS[self._config.shark_region]
         session = await self._get_session()
         id_token = self._auth.id_token
         if not id_token:
@@ -240,10 +238,10 @@ class SkegoxApi:
 
         try:
             async with session.post(
-                f"{region.ayla_login_url}/api/v1/token_sign_in",
+                f"{self._region.ayla_login_url}/api/v1/token_sign_in",
                 json={
-                    "app_id": region.ayla_app_id,
-                    "app_secret": region.ayla_app_secret,
+                    "app_id": self._region.ayla_app_id,
+                    "app_secret": self._region.ayla_app_secret,
                     "token": id_token,
                 },
             ) as resp:
@@ -257,7 +255,7 @@ class SkegoxApi:
 
             # List Ayla devices to get DSNs
             async with session.get(
-                f"{region.ayla_device_url}/apiv1/devices.json",
+                f"{self._region.ayla_device_url}/apiv1/devices.json",
                 headers=ayla_headers,
             ) as resp:
                 ayla_devices = await resp.json()
@@ -269,7 +267,7 @@ class SkegoxApi:
 
                 # Get properties for this device
                 async with session.get(
-                    f"{region.ayla_device_url}/apiv1/dsns/{dsn}/properties.json",
+                    f"{self._region.ayla_device_url}/apiv1/dsns/{dsn}/properties.json",
                     headers=ayla_headers,
                 ) as resp:
                     if resp.status >= 300:

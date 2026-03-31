@@ -43,6 +43,7 @@ class TokenData(BaseModel):
 
     auth0_refresh_token: str | None = None
     auth0_id_token: str | None = None
+    auth0_access_token: str | None = None
     ayla_access_token: str | None = None
     ayla_refresh_token: str | None = None
     ayla_token_expiry: str | None = None
@@ -176,6 +177,7 @@ class SharkAuth:
                     )
 
                 self._tokens.auth0_id_token = data["id_token"]
+                self._tokens.auth0_access_token = data.get("access_token")
                 # Auth0 may rotate the refresh token
                 if "refresh_token" in data:
                     self._tokens.auth0_refresh_token = data["refresh_token"]
@@ -426,6 +428,7 @@ class SharkAuth:
                 if not self._tokens:
                     self._tokens = TokenData()
                 self._tokens.auth0_id_token = data["id_token"]
+                self._tokens.auth0_access_token = data.get("access_token")
                 self._tokens.auth0_refresh_token = data.get("refresh_token")
                 self._save_tokens()
                 logger.info("Auth0 code exchange successful")
