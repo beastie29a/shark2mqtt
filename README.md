@@ -6,7 +6,9 @@ Bridge SharkNinja robot vacuums to [Home Assistant](https://www.home-assistant.i
 > - **UR2500SR Series Shark AI Ultra Robot Vacuum with Self-Empty Base** (UR250BEXUS)
 > - **UR2360S Series Shark Matrix Plus** (UR2360EEUS)
 >
-> It may work with other SharkNinja robot vacuums, but no other models have been tested. EU region configuration is included (`SHARK_REGION=eu`) but is completely untested and may not work.
+> It may work with other SharkNinja robot vacuums, but no other models have been tested.
+>
+> **EU region status:** Auth works, but the skegox device API currently returns 401. We've identified the correct EU endpoint (`stakra.rannsaka.thor.skegox.com`) but may need the EU-specific API key (`x-api-key` header). If you're an EU user, you can help by capturing a HAR from the Shark app via a proxy (mitmproxy, Charles, etc.) and sharing the `x-api-key` value — see [#3](https://github.com/CamSoper/shark2mqtt/issues/3).
 
 ## Quick Start
 
