@@ -43,7 +43,7 @@ REGIONS: dict[str, RegionConfig] = {
         ayla_app_id="android_shark_prod-lg-id",
         ayla_app_secret="android_shark_prod-xuf9mlHOo0p3Ty5bboFROSyRBlE",
         skegox_base="https://stakra.rannsaka.thor.skegox.com",
-        skegox_api_key="QQdbSrgicK2PxvACI1a2P5AN2xgO78Lw1VvnYczb",
+        skegox_api_key="T5m8d45crZDV9I5aCEZr4n2gSqJW64r2RNXqqhh1",
     ),
 }
 

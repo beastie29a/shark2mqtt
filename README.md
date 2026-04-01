@@ -9,7 +9,7 @@ Bridge SharkNinja robot vacuums to [Home Assistant](https://www.home-assistant.i
 >
 > It may work with other SharkNinja robot vacuums, but no other models have been tested.
 >
-> **EU region status:** Auth works, but the skegox device API currently returns 401. We've identified the correct EU endpoint (`stakra.rannsaka.thor.skegox.com`) but may need the EU-specific API key (`x-api-key` header). If you're an EU user, you can help by capturing a HAR from the Shark app via a proxy (mitmproxy, Charles, etc.) and sharing the `x-api-key` value — see [#3](https://github.com/CamSoper/shark2mqtt/issues/3).
+> **EU region support:** Set `SHARK_REGION=eu` to use with EU Shark accounts. Thanks to [@hjennerway](https://github.com/hjennerway) for enabling us to capture the EU API traffic that made this possible.
 
 ## Quick Start
 
