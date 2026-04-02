@@ -39,6 +39,7 @@ class SharkVacuum:
         self.floor_id: str = ""
         self.rooms: list[str] = []
         self.has_areas_v3: bool = False
+        self.api_backend: str = "ayla"
 
     @classmethod
     def from_skegox(cls, device_data: dict[str, Any]) -> SharkVacuum:
@@ -102,6 +103,7 @@ class SharkVacuum:
                 except (ValueError, TypeError):
                     pass
 
+        vac.api_backend = "skegox"
         return vac
 
     def update_properties(self, properties: list[dict[str, Any]]) -> None:

@@ -5,6 +5,7 @@ Adapted from the sharkiq library and TheOneOgre's fork.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -18,7 +19,15 @@ from tenacity import (
     wait_exponential,
 )
 
-from .const import REGIONS, RegionConfig
+from .const import (
+    POWER_MODE_BY_NAME,
+    PROP_SET_FIND_DEVICE,
+    PROP_SET_OPERATING_MODE,
+    PROP_SET_POWER_MODE,
+    REGIONS,
+    OperatingMode,
+    RegionConfig,
+)
 from .exc import AylaApiError, SharkAuthError
 from .shark_device import SharkVacuum
 
@@ -235,11 +244,85 @@ class AylaApi:
             try:
                 props = await self.get_device_properties(vacuum.dsn)
                 vacuum.update_properties(props)
+
+                # Parse room list from GET_Robot_Room_List
+                room_list = vacuum._properties.get("GET_Robot_Room_List", "")
+                if room_list and isinstance(room_list, str) and ":" in room_list:
+                    parts = room_list.split(":")
+                    vacuum.floor_id = parts[0]
+                    vacuum.rooms = parts[1:]
+
+                # Detect AreasToClean_V3 capability
+                prop_names = {
+                    p.get("property", {}).get("name") for p in props
+                }
+                vacuum.has_areas_v3 = "SET_AreasToClean_V3" in prop_names
             except AylaApiError:
                 logger.warning(
                     "Failed to fetch properties for %s", vacuum.dsn
                 )
             vacuums.append(vacuum)
 
-        logger.info("Fetched %d device(s)", len(vacuums))
+        logger.info("Fetched %d Ayla device(s)", len(vacuums))
         return vacuums
+
+    # --- Commands ---
+
+    _COMMAND_MAP: dict[str, tuple[str, int]] = {
+        "start": (PROP_SET_OPERATING_MODE, OperatingMode.START),
+        "stop": (PROP_SET_OPERATING_MODE, OperatingMode.STOP),
+        "pause": (PROP_SET_OPERATING_MODE, OperatingMode.PAUSE),
+        "return_to_base": (PROP_SET_OPERATING_MODE, OperatingMode.RETURN),
+        "locate": (PROP_SET_FIND_DEVICE, 1),
+    }
+
+    async def send_command(self, dsn: str, command: str) -> None:
+        """Send a command to the vacuum via Ayla property datapoint."""
+        entry = self._COMMAND_MAP.get(command)
+        if not entry:
+            logger.warning("Unknown command: %s", command)
+            return
+        prop_name, value = entry
+        await self.set_device_property(dsn, prop_name, value)
+
+    async def set_fan_speed(self, dsn: str, speed: str) -> None:
+        """Set fan speed via Ayla property datapoint."""
+        mode = POWER_MODE_BY_NAME.get(speed)
+        if mode is None:
+            logger.warning("Unknown fan speed: %s", speed)
+            return
+        await self.set_device_property(dsn, PROP_SET_POWER_MODE, int(mode))
+
+    async def clean_rooms(
+        self,
+        dsn: str,
+        rooms: list[str],
+        floor_id: str,
+        clean_type: str = "dry",
+        clean_count: int = 1,
+        mode: str = "UserRoom",
+        use_v3: bool = False,
+    ) -> None:
+        """Start cleaning specific rooms via Ayla property datapoints."""
+        if use_v3:
+            payload = json.dumps({
+                "areas_to_clean": {mode: rooms},
+                "clean_count": clean_count,
+                "floor_id": floor_id,
+                "cleantype": clean_type,
+            })
+            await self.set_device_property(dsn, "SET_AreasToClean_V3", payload)
+        else:
+            payload = json.dumps({
+                "floor_id": floor_id,
+                "areas_to_clean": [f"{mode}:{room}" for room in rooms],
+                "clean_count": clean_count,
+            })
+            await self.set_device_property(dsn, "SET_Areas_To_Clean", payload)
+            await self.set_device_property(
+                dsn, PROP_SET_OPERATING_MODE, OperatingMode.START,
+            )
+        logger.info(
+            "Ayla clean rooms %s on %s (mode=%s, count=%d, v3=%s)",
+            rooms, dsn, mode, clean_count, use_v3,
+        )
