@@ -1,0 +1,22 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="shark2mqtt",
+    version="0.1.0",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    install_requires=[
+        "aiohttp>=3.9,<4",
+        "aiomqtt>=2.0,<3",
+        "patchright>=1.58",
+        "pydantic>=2.0,<3",
+        "pydantic-settings>=2.0,<3",
+        "tenacity>=8.0,<10",
+    ],
+    entry_points={
+        "console_scripts": [
+            "shark2mqtt=src.main:main",
+        ],
+    },
+    python_requires=">=3.10",
+)
