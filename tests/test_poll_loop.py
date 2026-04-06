@@ -9,8 +9,6 @@ import pytest
 
 from src.main import poll_loop
 
-from .conftest import make_skegox_device
-
 
 @pytest.mark.asyncio
 async def test_poll_wakes_early_on_command_event(

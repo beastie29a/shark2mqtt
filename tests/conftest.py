@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.shark_device import SharkVacuum
-
 
 @pytest.fixture
 def command_event():
