@@ -189,14 +189,20 @@ def debug_dump_mard_structure(
 class AylaApi:
     """Async client for the Ayla Networks IoT API."""
 
-    def __init__(self, config: Settings, auth: SharkAuth) -> None:
+    def __init__(self, auth: SharkAuth) -> None:
         """Initialize the Ayla API client with settings and auth manager."""
-        self._region: RegionConfig = REGIONS[config.shark_region]
+        self._config: Settings = auth.config
+        self._region: RegionConfig = REGIONS[self._config.shark_region]
         self._auth = auth
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self._token_expiry: datetime | None = None
         self._session: aiohttp.ClientSession | None = None
+
+    @property
+    def config(self) -> Settings:
+        """Return the configuration object."""
+        return self._config
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

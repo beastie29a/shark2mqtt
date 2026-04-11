@@ -69,6 +69,11 @@ class SharkAuth:
         self._browser_launch_day: int = 0  # day of year
 
     @property
+    def config(self) -> Settings:
+        """Return the configuration."""
+        return self._config
+
+    @property
     def id_token(self) -> str | None:
         """Current Auth0 id_token for Ayla sign-in."""
         return self._tokens.auth0_id_token if self._tokens else None

@@ -263,7 +263,7 @@ async def run(config: Settings) -> None:
         await auth.ensure_authenticated()
         if auth.id_token:
             api = SkegoxApi(config, auth)
-            ayla_api = AylaApi(config, auth)
+            ayla_api = AylaApi(auth)
             if config.shark_household_id:
                 api.set_household(config.shark_household_id)
             skegox_devices = await api.get_all_devices()
@@ -294,7 +294,7 @@ async def run(config: Settings) -> None:
         return
 
     api = SkegoxApi(config, auth)
-    ayla_api = AylaApi(config, auth)
+    ayla_api = AylaApi(auth)
     if config.shark_household_id:
         api.set_household(config.shark_household_id)
 

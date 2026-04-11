@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.config import Settings
+from src.shark_auth import SharkAuth
+
 
 @pytest.fixture
 def command_event():
@@ -50,6 +53,20 @@ def mock_mqtt():
     mqtt.publish_discovery.return_value = None
     mqtt.publish_state.return_value = None
     return mqtt
+
+
+shark_config: Settings = Settings(
+        shark_username="shark_user",
+        shark_password="shark_password",
+        shark_region="us",
+        mqtt_host="local",
+        mqtt_username="mqtt_user",
+        mqtt_password="mqtt_password",
+    )
+
+shark_auth = SharkAuth(
+    config=shark_config
+)
 
 
 def make_skegox_device(
