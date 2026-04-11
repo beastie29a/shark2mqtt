@@ -8,6 +8,7 @@ Handles the full auth cascade:
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import logging
@@ -22,6 +23,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
+from patchright.async_api import async_playwright
 from pydantic import BaseModel
 
 from .config import Settings
@@ -54,6 +56,7 @@ class SharkAuth:
     """Manages Auth0 authentication lifecycle."""
 
     def __init__(self, config: Settings) -> None:
+        """Initialize SharkAuth."""
         self._config = config
         self._region: RegionConfig = REGIONS[config.shark_region]
         self._token_path = Path(config.token_dir) / TOKEN_FILENAME
@@ -72,10 +75,12 @@ class SharkAuth:
 
     @property
     def ayla_access_token(self) -> str | None:
+        """Current Ayla access token for API calls."""
         return self._tokens.ayla_access_token if self._tokens else None
 
     @property
     def ayla_refresh_token(self) -> str | None:
+        """Current Ayla refresh token for API calls."""
         return self._tokens.ayla_refresh_token if self._tokens else None
 
     def update_ayla_tokens(
@@ -84,7 +89,7 @@ class SharkAuth:
         refresh_token: str,
         expiry: datetime,
     ) -> None:
-        """Called by AylaApi after sign-in or refresh to persist Ayla tokens."""
+        """Update and persist Ayla tokens after sign-in or refresh."""
         if not self._tokens:
             self._tokens = TokenData()
         self._tokens.ayla_access_token = access_token
@@ -105,10 +110,7 @@ class SharkAuth:
         # Check circuit breaker backoff
         if time.monotonic() < self._backoff_until:
             remaining = int(self._backoff_until - time.monotonic())
-            raise SharkAuthError(
-                f"Auth backoff active, {remaining}s remaining. "
-                "Too many recent failures."
-            )
+            raise SharkAuthError(f"Auth backoff active, {remaining}s remaining. Too many recent failures.")
 
         # Step 1: Load cached tokens
         if not self._tokens:
@@ -128,26 +130,28 @@ class SharkAuth:
             try:
                 await self._refresh_auth0_token()
                 self._consecutive_failures = 0
-                return self._tokens.auth0_id_token  # type: ignore[return-value]
             except SharkAuthError:
                 logger.warning("Auth0 refresh_token grant failed")
+            else:
+                return self._tokens.auth0_id_token
 
         # Step 3: Try browser auth
         try:
             await self._browser_authenticate()
             self._consecutive_failures = 0
-            return self._tokens.auth0_id_token  # type: ignore[return-value]
         except SharkAuthError:
             self._consecutive_failures += 1
             if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 self._backoff_until = time.monotonic() + BACKOFF_SECONDS
                 logger.error(
-                    "Auth circuit breaker tripped after %d failures. "
-                    "Backing off for %d minutes.",
+                    "Auth circuit breaker tripped after %d failures. Backing off for %d minutes.",
                     self._consecutive_failures,
                     BACKOFF_SECONDS // 60,
                 )
             raise
+        else:
+            return self._tokens.auth0_id_token
+
 
     async def _refresh_auth0_token(self) -> None:
         """Exchange Auth0 refresh_token for a new id_token."""
@@ -160,20 +164,14 @@ class SharkAuth:
             "refresh_token": self._tokens.auth0_refresh_token,
         }
 
-        async with aiohttp.ClientSession() as session, session.post(
-            self._region.auth0_token_url, json=payload
-        ) as resp:
+        async with aiohttp.ClientSession() as session, session.post(self._region.auth0_token_url, json=payload) as resp:
             data = await resp.json()
             if resp.status != 200:
                 error = data.get("error", "unknown")
                 desc = data.get("error_description", "")
                 if resp.status == 429:
-                    raise SharkAuthLockedError(
-                        f"Auth0 rate limited: {error} {desc}"
-                    )
-                raise SharkAuthError(
-                    f"Auth0 refresh failed ({resp.status}): {error} {desc}"
-                )
+                    raise SharkAuthLockedError(f"Auth0 rate limited: {error} {desc}")
+                raise SharkAuthError(f"Auth0 refresh failed ({resp.status}): {error} {desc}")
 
             self._tokens.auth0_id_token = data["id_token"]
             self._tokens.auth0_access_token = data.get("access_token")
@@ -192,8 +190,6 @@ class SharkAuth:
         """
         self._check_browser_rate_limit()
         self._record_browser_launch()
-
-        from patchright.async_api import async_playwright
 
         state = secrets.token_urlsafe(16)
         verifier, challenge = self.generate_pkce_pair()
@@ -260,23 +256,15 @@ class SharkAuth:
                 auth_error: Exception | None = None
                 try:
                     # Fill email — Auth0 uses a multi-step flow
-                    username_input = page.locator(
-                        'input[name="username"], input[type="email"]'
-                    ).first
+                    username_input = page.locator('input[name="username"], input[type="email"]').first
                     await username_input.wait_for(state="visible", timeout=15000)
                     await username_input.fill(self._config.shark_username)
 
                     # Handle Cloudflare Turnstile CAPTCHA if present
                     # The checkbox is inside an iframe from challenges.cloudflare.com
                     try:
-                        turnstile_frame = page.frame_locator(
-                            'iframe[src*="challenges.cloudflare.com"]'
-                        )
-                        checkbox = turnstile_frame.locator(
-                            'input[type="checkbox"], '
-                            'label, '
-                            'body'
-                        ).first
+                        turnstile_frame = page.frame_locator('iframe[src*="challenges.cloudflare.com"]')
+                        checkbox = turnstile_frame.locator('input[type="checkbox"], label, body').first
                         # Wait briefly for Turnstile to load
                         await page.wait_for_timeout(2000)
                         if await page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
@@ -284,19 +272,17 @@ class SharkAuth:
                             await checkbox.click(timeout=10000)
                             # Wait for Turnstile to verify
                             await page.wait_for_timeout(5000)
-                    except Exception as captcha_err:
-                        logger.debug("CAPTCHA handling: %s", captcha_err)
+                    except Exception:
+                        logger.exception("CAPTCHA handling: ")
 
                     # Click Continue/Submit (Auth0 uses "Continue" button)
-                    submit_btn = page.locator(
-                        'button[type="submit"], button:has-text("Continue")'
-                    ).first
+                    submit_btn = page.locator('button[type="submit"], button:has-text("Continue")').first
                     await submit_btn.click()
 
                     # Wait for password field to appear (second step)
-                    password_input = page.locator(
-                        'input[name="password"], input[type="password"]'
-                    ).locator("visible=true").first
+                    password_input = (
+                        page.locator('input[name="password"], input[type="password"]').locator("visible=true").first
+                    )
                     await password_input.wait_for(state="visible", timeout=30000)
                     await password_input.fill(self._config.shark_password)
 
@@ -314,7 +300,7 @@ class SharkAuth:
                         await skip_btn.click(timeout=10000)
                         logger.debug("Skipped passkey enrollment")
                     except Exception:
-                        pass  # Interstitial may not appear
+                        logger.exception("Failed to skip passkey enrollment")
 
                     # Wait for the redirect interception to capture the code
                     code = await asyncio.wait_for(auth_code_future, timeout=60)
@@ -323,6 +309,7 @@ class SharkAuth:
                 except Exception as exc:
                     auth_error = exc
                     # Screenshot while page is still alive
+                    logger.exception("Browser auth failed")
                     await self._save_failure_screenshot(page)
 
             finally:
@@ -331,12 +318,9 @@ class SharkAuth:
             if auth_error is not None:
                 if isinstance(auth_error, (asyncio.TimeoutError, TimeoutError)):
                     raise SharkAuthError(
-                        "Browser auth timed out waiting for redirect. "
-                        "Check credentials or screenshot in TOKEN_DIR."
+                        "Browser auth timed out waiting for redirect. Check credentials or screenshot in TOKEN_DIR."
                     )
-                raise SharkAuthError(
-                    f"Browser auth failed: {auth_error}"
-                ) from auth_error
+                raise SharkAuthError(f"Browser auth failed: {auth_error}") from auth_error
 
         # Exchange code for tokens
         await self.exchange_code_for_tokens(code, verifier)
@@ -346,19 +330,20 @@ class SharkAuth:
     @staticmethod
     def _find_chromium() -> str | None:
         """Find the full Chromium binary (not headless shell)."""
-        import glob
         browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
         patterns = []
         if browsers_path:
             patterns.append(f"{browsers_path}/chromium-*/chrome-linux*/chrome")
-        patterns.extend([
-            os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-            "/usr/bin/google-chrome",
-        ])
+        patterns.extend(
+            [
+                Path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/google-chrome",
+            ]
+        )
         for pattern in patterns:
-            matches = glob.glob(pattern)
+            matches = Path.glob(pattern)
             if matches:
                 logger.debug("Found Chromium at %s", matches[0])
                 return matches[0]
@@ -369,14 +354,11 @@ class SharkAuth:
     async def _save_failure_screenshot(self, page: Any) -> None:
         """Save a screenshot on auth failure for debugging."""
         try:
-            screenshot_path = str(
-                Path(self._config.token_dir)
-                / f"auth_failure_{int(time.time())}.png"
-            )
+            screenshot_path = str(Path(self._config.token_dir) / f"auth_failure_{int(time.time())}.png")
             await page.screenshot(path=screenshot_path)
             logger.error("Auth failure screenshot saved to %s", screenshot_path)
         except Exception:
-            logger.debug("Could not save failure screenshot")
+            logger.exception("Could not save failure screenshot")
 
     @staticmethod
     def generate_pkce_pair() -> tuple[str, str]:
@@ -400,9 +382,7 @@ class SharkAuth:
         }
         return f"{self._region.auth0_url}/authorize?{urlencode(params)}"
 
-    async def exchange_code_for_tokens(
-        self, code: str, code_verifier: str
-    ) -> None:
+    async def exchange_code_for_tokens(self, code: str, code_verifier: str) -> None:
         """Exchange an authorization code for Auth0 tokens."""
         payload = {
             "grant_type": "authorization_code",
@@ -412,16 +392,12 @@ class SharkAuth:
             "redirect_uri": self._region.auth0_redirect_uri,
         }
 
-        async with aiohttp.ClientSession() as session, session.post(
-            self._region.auth0_token_url, json=payload
-        ) as resp:
+        async with aiohttp.ClientSession() as session, session.post(self._region.auth0_token_url, json=payload) as resp:
             data = await resp.json()
             if resp.status != 200:
                 error = data.get("error", "unknown")
                 desc = data.get("error_description", "")
-                raise SharkAuthError(
-                    f"Auth0 code exchange failed ({resp.status}): {error} {desc}"
-                )
+                raise SharkAuthError(f"Auth0 code exchange failed ({resp.status}): {error} {desc}")
 
             if not self._tokens:
                 self._tokens = TokenData()
@@ -442,10 +418,11 @@ class SharkAuth:
             data = json.loads(self._token_path.read_text())
             tokens = TokenData(**data)
             logger.info("Loaded cached tokens from %s", self._token_path)
-            return tokens
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning("Failed to load token file: %s", e)
             return None
+        else:
+            return tokens
 
     def _save_tokens(self) -> None:
         """Atomically write tokens to disk."""
@@ -455,19 +432,15 @@ class SharkAuth:
         self._tokens.saved_at = datetime.now(UTC).isoformat()
         self._token_path.parent.mkdir(parents=True, exist_ok=True)
 
-        fd, tmp_path = tempfile.mkstemp(
-            dir=self._token_path.parent, suffix=".tmp"
-        )
+        fd, tmp_path = tempfile.mkstemp(dir=self._token_path.parent, suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(self._tokens.model_dump_json(indent=2))
-            os.replace(tmp_path, self._token_path)
+            Path.replace(tmp_path, self._token_path)
             logger.debug("Tokens saved to %s", self._token_path)
         except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                Path.unlink(tmp_path)
             raise
 
     # --- Circuit breaker helpers ---
