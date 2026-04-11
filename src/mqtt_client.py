@@ -472,148 +472,167 @@ class MqttClient:
             room, api_rooms, device_id, mode,
         )
 
-    async def _handle_send_command(
-        self,
-        handler: Any,
-        device_id: str,
-        payload: str,
-        devices: dict[str, Any],
-    ) -> None:
-        """Handle vacuum.send_command from HA.
 
-        HA publishes JSON: {"command": "...", "params": {...}}
+async def _handle_send_command(
+    self,
+    handler: Any,
+    device_id: str,
+    payload: str,
+    devices: dict[str, Any],
+) -> None:
+    """Handle vacuum.send_command from HA.
 
-        Supported commands:
-          clean_room:    {room: "Kitchen"}
-          matrix_clean:  {room: "Kitchen"}
-          clean_rooms:   {rooms: ["Kitchen", "Den"], mode: "UserRoom",
-                          clean_count: 1, clean_type: "dry"}
-        """
+    HA publishes JSON: {"command": "...", "params": {...}}
 
-        data = json.loads(payload)
-        logger.debug("send_command raw data: %r", data)
-        command = data.get("command", "")
-        params = data.get("params", data.get("param", {}))
-        # HA may send params as a JSON string — unwrap it
-        if isinstance(params, str):
-            try:
-                params = json.loads(params)
-            except ValueError, TypeError:
-                logger.warning("send_command params not valid JSON: %r", params)
-                params = {}
-        if not isinstance(params, dict):
+    Supported commands:
+      clean_room:    {room: "Kitchen"}
+      matrix_clean:  {room: "Kitchen"}
+      clean_rooms:   {rooms: ["Kitchen", "Den"], mode: "UserRoom",
+                      clean_count: 1, clean_type: "dry"}
+    """
+
+    data = json.loads(payload)
+    logger.debug("send_command raw data: %r", data)
+
+    # Extract command and parameters
+    command = data.get("command", "")
+    params = self._extract_params(data)
+
+    # Get device attributes
+    device = devices.get(device_id)
+    use_v3 = getattr(device, "has_areas_v3", False)
+
+    # Create floor_id getter
+    def get_floor_id() -> str:
+        fid = params.get("floor_id", "")
+        if not fid and device and hasattr(device, "floor_id"):
+            fid = device.floor_id
+        return fid
+
+    # Dispatch to specific command handlers
+    command_handlers = {
+        "clean_room": self._handle_clean_room_send_command,
+        "matrix_clean": self._handle_matrix_clean_send_command,
+        "clean_rooms": self._handle_clean_rooms_send_command,
+    }
+
+    handler_func = command_handlers.get(command)
+    if handler_func:
+        await handler_func(handler, device_id, params, get_floor_id, use_v3)
+    else:
+        logger.info("Forwarding send_command '%s' as generic command", command)
+        await handler.send_command(device_id, command)
+
+
+def _extract_params(self, data: dict[str, Any]) -> dict[str, Any]:
+    """Extract and normalize parameters from send_command data."""
+    params = data.get("params", data.get("param", {}))
+
+    # HA may send params as a JSON string — unwrap it
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except ValueError, TypeError:
+            logger.warning("send_command params not valid JSON: %r", params)
             params = {}
-        # HA puts service data keys at top level (not nested under "params")
-        # so merge any top-level keys (except "command") as fallback
-        for key, val in data.items():
-            if key not in ("command", "params", "param") and key not in params:
-                params[key] = val
 
-        # Get device attributes
-        device = devices.get(device_id)
-        use_v3 = getattr(device, "has_areas_v3", False)
+    if not isinstance(params, dict):
+        params = {}
 
-        def get_floor_id() -> str:
-            fid = params.get("floor_id", "")
-            if not fid and device and hasattr(device, "floor_id"):
-                fid = device.floor_id
-            return fid
+    # HA puts service data keys at top level (not nested under "params")
+    # so merge any top-level keys (except "command") as fallback
+    for key, val in data.items():
+        if key not in ("command", "params", "param") and key not in params:
+            params[key] = val
 
-        # Dispatch to specific command handlers
-        if command == "clean_room":
-            await self._handle_clean_room_send_command(handler, device_id, params, get_floor_id, use_v3)
-        elif command == "matrix_clean":
-            await self._handle_matrix_clean_send_command(handler, device_id, params, get_floor_id, use_v3)
-        elif command == "clean_rooms":
-            await self._handle_clean_rooms_send_command(handler, device_id, params, get_floor_id, use_v3)
-        else:
-            logger.info("Forwarding send_command '%s' as generic command", command)
-            await handler.send_command(device_id, command)
+    return params
 
-    async def _handle_clean_room_send_command(
-        self,
-        handler: Any,
-        device_id: str,
-        params: dict[str, Any],
-        get_floor_id: callable,
-        use_v3: bool,
-    ) -> None:
-        """Handle clean_room command from send_command."""
-        room = params.get("room", "")
-        if not room:
-            logger.warning("clean_room requires 'room' in params")
-            return
-        floor_id = get_floor_id()
-        if not floor_id:
-            logger.warning("clean_room: no floor_id available")
-            return
-        await handler.clean_rooms(
-            device_id,
-            rooms=[room],
-            floor_id=floor_id,
-            clean_type=params.get("clean_type", "dry"),
-            clean_count=1,
-            mode="UserRoom",
-            use_v3=use_v3,
-        )
 
-    async def _handle_matrix_clean_send_command(
-        self,
-        handler: Any,
-        device_id: str,
-        params: dict[str, Any],
-        get_floor_id: callable,
-        use_v3: bool,
-    ) -> None:
-        """Handle matrix_clean command from send_command."""
-        room = params.get("room", "")
-        if not room:
-            logger.warning("matrix_clean requires 'room' in params")
-            return
-        floor_id = get_floor_id()
-        if not floor_id:
-            logger.warning("matrix_clean: no floor_id available")
-            return
-        await handler.clean_rooms(
-            device_id,
-            rooms=[room],
-            floor_id=floor_id,
-            clean_type=params.get("clean_type", "dry"),
-            clean_count=2,
-            mode="UltraClean",
-            use_v3=use_v3,
-        )
+async def _handle_clean_room_send_command(
+    self,
+    handler: Any,
+    device_id: str,
+    params: dict[str, Any],
+    get_floor_id: callable,
+    use_v3: bool,
+) -> None:
+    """Handle clean_room command from send_command."""
+    room = params.get("room", "")
+    if not room:
+        logger.warning("clean_room requires 'room' in params")
+        return
 
-    async def _handle_clean_rooms_send_command(
-        self,
-        handler: Any,
-        device_id: str,
-        params: dict[str, Any],
-        get_floor_id: callable,
-        use_v3: bool,
-    ) -> None:
-        """Handle clean_rooms command from send_command."""
-        rooms = params.get("rooms", [])
-        if not rooms:
-            logger.warning("clean_rooms requires 'rooms' in params")
-            return
-        floor_id = get_floor_id()
-        if not floor_id:
-            logger.warning("clean_rooms: no floor_id available")
-            return
-        await handler.clean_rooms(
-            device_id,
-            rooms=rooms,
-            floor_id=floor_id,
-            clean_type=params.get("clean_type", "dry"),
-            clean_count=params.get("clean_count", 1),
-            mode=params.get("mode", "UserRoom"),
-            use_v3=use_v3,
-        )
+    floor_id = get_floor_id()
+    if not floor_id:
+        logger.warning("clean_room: no floor_id available")
+        return
 
-    def _extract_dsn(self, topic: str) -> str | None:
-        """Extract DSN from topic like 'shark2mqtt/{dsn}/command'."""
-        parts = topic.split("/")
-        if len(parts) >= 3 and parts[0] == self._prefix:
-            return parts[1]
-        return None
+    await handler.clean_rooms(
+        device_id,
+        rooms=[room],
+        floor_id=floor_id,
+        clean_type=params.get("clean_type", "dry"),
+        clean_count=1,
+        mode="UserRoom",
+        use_v3=use_v3,
+    )
+
+
+async def _handle_matrix_clean_send_command(
+    self,
+    handler: Any,
+    device_id: str,
+    params: dict[str, Any],
+    get_floor_id: callable,
+    use_v3: bool,
+) -> None:
+    """Handle matrix_clean command from send_command."""
+    room = params.get("room", "")
+    if not room:
+        logger.warning("matrix_clean requires 'room' in params")
+        return
+
+    floor_id = get_floor_id()
+    if not floor_id:
+        logger.warning("matrix_clean: no floor_id available")
+        return
+
+    await handler.clean_rooms(
+        device_id,
+        rooms=[room],
+        floor_id=floor_id,
+        clean_type=params.get("clean_type", "dry"),
+        clean_count=2,
+        mode="UltraClean",
+        use_v3=use_v3,
+    )
+
+
+async def _handle_clean_rooms_send_command(
+    self,
+    handler: Any,
+    device_id: str,
+    params: dict[str, Any],
+    get_floor_id: callable,
+    use_v3: bool,
+) -> None:
+    """Handle clean_rooms command from send_command."""
+    rooms = params.get("rooms", [])
+    if not rooms:
+        logger.warning("clean_rooms requires 'rooms' in params")
+        return
+
+    floor_id = get_floor_id()
+    if not floor_id:
+        logger.warning("clean_rooms: no floor_id available")
+        return
+
+    await handler.clean_rooms(
+        device_id,
+        rooms=rooms,
+        floor_id=floor_id,
+        clean_type=params.get("clean_type", "dry"),
+        clean_count=params.get("clean_count", 1),
+        mode=params.get("mode", "UserRoom"),
+        use_v3=use_v3,
+    )
