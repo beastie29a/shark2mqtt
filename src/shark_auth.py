@@ -131,7 +131,7 @@ class SharkAuth:
                 await self._refresh_auth0_token()
                 self._consecutive_failures = 0
             except SharkAuthError:
-                logger.warning("Auth0 refresh_token grant failed")
+                logger.exception("Auth0 refresh_token grant failed")
             else:
                 return self._tokens.auth0_id_token
 
@@ -151,7 +151,6 @@ class SharkAuth:
             raise
         else:
             return self._tokens.auth0_id_token
-
 
     async def _refresh_auth0_token(self) -> None:
         """Exchange Auth0 refresh_token for a new id_token."""

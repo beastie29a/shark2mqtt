@@ -59,7 +59,7 @@ async def _run_listener_with_messages(
             yield msg
 
     mock_client.messages = message_stream()
-    mqtt._client = mock_client
+    setattr(mqtt, "_client", mock_client)
 
     await mqtt.command_listener(handler, devices, command_event)
     return mqtt
