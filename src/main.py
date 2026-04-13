@@ -67,6 +67,7 @@ async def poll_loop(
     auth: SharkAuth,
     config: Settings,
     devices_map: dict[str, SharkVacuum],
+    ayla_room_data: dict[str, tuple[str, list[str]]],
     command_event: asyncio.Event,
 ) -> None:
     """Periodically poll device state and publish to MQTT."""
@@ -83,6 +84,8 @@ async def poll_loop(
             raw_devices = await api.get_all_devices()
             for raw in raw_devices:
                 device = SharkVacuum.from_skegox(raw)
+                if not device.rooms and device.dsn in ayla_room_data:
+                    device.floor_id, device.rooms = ayla_room_data[device.dsn]
                 skegox_snds.add(device.dsn)
                 devices_map[device.dsn] = device
                 await mqtt.publish_discovery(device)
@@ -201,13 +204,28 @@ async def run(config: Settings) -> None:
     try:
         await auth.ensure_authenticated()
 
+        # Prefetch Ayla room data once at startup as a fallback for
+        # skegox devices whose Robot_Room_List shadow is empty (rooms
+        # configured before the skegox migration).
+        ayla_room_data: dict[str, tuple[str, list[str]]] = {}
+        try:
+            ayla_vacuums = await ayla_api.get_devices()
+            for v in ayla_vacuums:
+                bsn = v._properties.get("GET_Battery_Serial_Num", "")
+                snd = bsn.split("-")[-1] if "-" in bsn else ""
+                if snd and v.rooms:
+                    ayla_room_data[snd] = (v.floor_id, v.rooms)
+                    logger.info("Ayla room fallback for %s: %s", snd, v.rooms)
+        except Exception:
+            logger.warning("Failed to prefetch Ayla room data", exc_info=True)
+
         async with mqtt:
             await mqtt.publish_status({"state": "online"})
 
             command_event = asyncio.Event()
 
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, command_event))
+                tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, command_event))
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
 
                 async def _shutdown_watcher() -> None:

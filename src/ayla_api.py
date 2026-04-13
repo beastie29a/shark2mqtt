@@ -155,7 +155,13 @@ class AylaApi:
                 # Ayla refresh failed — need full re-auth via Auth0
                 logger.warning("Ayla refresh failed, re-authenticating via Auth0")
                 id_token = await self._auth.ensure_authenticated()
-                await self.sign_in(id_token)
+                try:
+                    await self.sign_in(id_token)
+                except SharkAuthError:
+                    # Stale Auth0 id_token — force refresh and retry
+                    logger.warning("Ayla sign-in 401, forcing Auth0 refresh")
+                    id_token = await self._auth.ensure_authenticated(force_refresh=True)
+                    await self.sign_in(id_token)
 
     @property
     def _headers(self) -> dict[str, str]:
