@@ -192,7 +192,9 @@ class SharkVacuum:
 
     @property
     def rssi(self) -> int:
-        return -self._get_int_prop(PROP_GET_RSSI)
+        # Some models report RSSI as positive, others as negative dBm.
+        # Real WiFi RSSI is always ≤ 0 dBm, so normalize to negative.
+        return -abs(self._get_int_prop(PROP_GET_RSSI))
 
     @property
     def firmware_version(self) -> str:
