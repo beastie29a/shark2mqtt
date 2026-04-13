@@ -192,7 +192,7 @@ class SharkVacuum:
 
     @property
     def rssi(self) -> int:
-        return self._get_int_prop(PROP_GET_RSSI)
+        return -self._get_int_prop(PROP_GET_RSSI)
 
     @property
     def firmware_version(self) -> str:

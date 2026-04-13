@@ -64,7 +64,7 @@ def make_skegox_device(
         },
         "telemetry": {
             "Battery_Capacity": battery,
-            "RSSI": -50,
+            "RSSI": 50,
         },
         "connectivityStatus": {"connected": connected},
         "shadow": {
