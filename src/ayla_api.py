@@ -287,6 +287,7 @@ class AylaApi:
                         "Ayla room/area/zone/map/floor properties for %s: %s",
                         vacuum.product_name, hint_props,
                     )
+                    await self._debug_dump_file_datapoints(vacuum)
             except AylaApiError:
                 logger.warning(
                     "Failed to fetch properties for %s", vacuum.dsn
@@ -295,6 +296,68 @@ class AylaApi:
 
         logger.info("Fetched %d Ayla device(s)", len(vacuums))
         return vacuums
+
+    async def _debug_dump_file_datapoints(self, vacuum: SharkVacuum) -> None:
+        """DEBUG helper: fetch and log selected Ayla file-type datapoints.
+
+        Used to investigate issues like #4 where room names come through
+        as placeholder zone IDs. Dumps the file contents for properties
+        that are the most likely sources of the real display names.
+        """
+        candidates = (
+            "Mobile_App_Room_Definition",
+            "GET_Zones",
+            "GET_Persistent_Floor_1",
+        )
+        session = await self._get_session()
+        for prop in candidates:
+            dp_url = vacuum._properties.get(prop)
+            if not isinstance(dp_url, str) or not dp_url.startswith("http"):
+                logger.debug(
+                    "File datapoint %s for %s: not set (%r)",
+                    prop, vacuum.product_name, dp_url,
+                )
+                continue
+            try:
+                dp = await self._request("GET", dp_url)
+                file_url = dp.get("datapoint", {}).get("file")
+                if not file_url:
+                    logger.debug(
+                        "File datapoint %s for %s: no file URL in %r",
+                        prop, vacuum.product_name, dp,
+                    )
+                    continue
+                async with session.get(file_url) as resp:
+                    body = await resp.read()
+            except Exception as e:
+                logger.debug(
+                    "File datapoint %s for %s: fetch failed (%s)",
+                    prop, vacuum.product_name, e,
+                )
+                continue
+
+            try:
+                text = body.decode("utf-8")
+                if text.lstrip().startswith(("{", "[")):
+                    try:
+                        parsed = json.loads(text)
+                        logger.debug(
+                            "File datapoint %s for %s (JSON, %d bytes): %s",
+                            prop, vacuum.product_name, len(body),
+                            json.dumps(parsed)[:4000],
+                        )
+                        continue
+                    except json.JSONDecodeError:
+                        pass
+                logger.debug(
+                    "File datapoint %s for %s (text, %d bytes): %s",
+                    prop, vacuum.product_name, len(body), text[:2000],
+                )
+            except UnicodeDecodeError:
+                logger.debug(
+                    "File datapoint %s for %s (binary, %d bytes, first 64 hex): %s",
+                    prop, vacuum.product_name, len(body), body[:64].hex(),
+                )
 
     # --- Commands ---
 
