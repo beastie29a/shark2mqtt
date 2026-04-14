@@ -40,6 +40,7 @@ class SharkVacuum:
         self.rooms: list[str] = []
         self.has_areas_v3: bool = False
         self.api_backend: str = "ayla"
+        self.room_name_map: dict[str, str] = {}
 
     @classmethod
     def from_skegox(cls, device_data: dict[str, Any]) -> SharkVacuum:

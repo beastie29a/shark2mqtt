@@ -44,6 +44,17 @@ _AUTH_HEADER = "auth_token {}"
 _REFRESH_BUFFER = timedelta(minutes=5)
 
 
+def _apply_room_name_map(
+    rooms: list[str], name_map: dict[str, str],
+) -> list[str]:
+    """Rewrite rooms through a name map, passing unknown entries through.
+
+    Empty mapped values are treated as unknown so a `user_room_name: ""`
+    entry can never erase a room's name.
+    """
+    return [name_map.get(r) or r for r in rooms]
+
+
 class AylaApi:
     """Async client for the Ayla Networks IoT API."""
 
@@ -264,6 +275,22 @@ class AylaApi:
                 }
                 vacuum.has_areas_v3 = "SET_AreasToClean_V3" in prop_names
 
+                # Build room-name map from Mobile_App_Room_Definition
+                # and apply it to any placeholder names (AZ_N, etc.)
+                # in vacuum.rooms. See issue #4.
+                vacuum.room_name_map = await self._fetch_room_name_map(vacuum)
+                if vacuum.room_name_map and vacuum.rooms:
+                    renamed = _apply_room_name_map(
+                        vacuum.rooms, vacuum.room_name_map,
+                    )
+                    if renamed != vacuum.rooms:
+                        logger.info(
+                            "Renamed Ayla rooms for %s (%s): %s -> %s",
+                            vacuum.product_name, vacuum.dsn,
+                            vacuum.rooms, renamed,
+                        )
+                        vacuum.rooms = renamed
+
                 if logger.isEnabledFor(logging.DEBUG):
                     sorted_names = sorted(prop_names - {None})
                     hint_keywords = ("room", "area", "zone", "map", "floor")
@@ -297,6 +324,78 @@ class AylaApi:
         logger.info("Fetched %d Ayla device(s)", len(vacuums))
         return vacuums
 
+    async def _fetch_file_datapoint(self, dp_url: str) -> bytes | None:
+        """Resolve an Ayla file-type datapoint URL to its actual file bytes.
+
+        Ayla `base_type: file` properties expose a datapoint URL in the
+        property value; fetching that returns JSON with a `file` field
+        pointing to the real content. Returns None on any failure.
+        """
+        if not isinstance(dp_url, str) or not dp_url.startswith("http"):
+            return None
+        try:
+            dp = await self._request("GET", dp_url)
+            file_url = dp.get("datapoint", {}).get("file")
+            if not file_url:
+                return None
+            session = await self._get_session()
+            async with session.get(file_url) as resp:
+                return await resp.read()
+        except Exception:
+            logger.debug("File datapoint fetch failed for %s", dp_url, exc_info=True)
+            return None
+
+    async def _fetch_room_name_map(
+        self, vacuum: SharkVacuum,
+    ) -> dict[str, str]:
+        """Build a {robot_room_name -> display_name} map from Mobile_App_Room_Definition.
+
+        For each UserRoom area in the file, maps robot_room_name to
+        user_room_name (if non-empty) or robot_room_name itself. The
+        resulting map is an identity mapping for accounts where the
+        Shark app stored display names in robot_room_name, and a true
+        rewrite for accounts where display names live in
+        user_room_name while robot_room_name holds AZ_N placeholders.
+
+        See issue #4.
+        """
+        dp_url = vacuum._properties.get("Mobile_App_Room_Definition")
+        body = await self._fetch_file_datapoint(dp_url)
+        if not body:
+            return {}
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            logger.debug(
+                "Mobile_App_Room_Definition for %s: not valid JSON",
+                vacuum.product_name,
+            )
+            return {}
+
+        name_map: dict[str, str] = {}
+        for area in parsed.get("areas", []):
+            meta = area.get("area_meta_data", "")
+            if not meta.startswith("UserRoom:"):
+                continue
+            robot_name = area.get("robot_room_name", "") or ""
+            user_name = area.get("user_room_name", "") or ""
+            if not robot_name:
+                continue
+            name_map[robot_name] = user_name or robot_name
+
+        non_identity = {k: v for k, v in name_map.items() if k != v}
+        if non_identity:
+            logger.info(
+                "Room name map for %s (%s) contains rewrites: %s",
+                vacuum.product_name, vacuum.dsn, non_identity,
+            )
+        else:
+            logger.debug(
+                "Room name map for %s (%s) is identity (%d entries)",
+                vacuum.product_name, vacuum.dsn, len(name_map),
+            )
+        return name_map
+
     async def _debug_dump_file_datapoints(self, vacuum: SharkVacuum) -> None:
         """DEBUG helper: fetch and log selected Ayla file-type datapoints.
 
@@ -309,7 +408,6 @@ class AylaApi:
             "GET_Zones",
             "GET_Persistent_Floor_1",
         )
-        session = await self._get_session()
         for prop in candidates:
             dp_url = vacuum._properties.get(prop)
             if not isinstance(dp_url, str) or not dp_url.startswith("http"):
@@ -318,21 +416,11 @@ class AylaApi:
                     prop, vacuum.product_name, dp_url,
                 )
                 continue
-            try:
-                dp = await self._request("GET", dp_url)
-                file_url = dp.get("datapoint", {}).get("file")
-                if not file_url:
-                    logger.debug(
-                        "File datapoint %s for %s: no file URL in %r",
-                        prop, vacuum.product_name, dp,
-                    )
-                    continue
-                async with session.get(file_url) as resp:
-                    body = await resp.read()
-            except Exception as e:
+            body = await self._fetch_file_datapoint(dp_url)
+            if body is None:
                 logger.debug(
-                    "File datapoint %s for %s: fetch failed (%s)",
-                    prop, vacuum.product_name, e,
+                    "File datapoint %s for %s: fetch failed",
+                    prop, vacuum.product_name,
                 )
                 continue
 

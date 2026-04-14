@@ -68,9 +68,12 @@ async def poll_loop(
     config: Settings,
     devices_map: dict[str, SharkVacuum],
     ayla_room_data: dict[str, tuple[str, list[str]]],
+    ayla_name_maps: dict[str, dict[str, str]],
     command_event: asyncio.Event,
 ) -> None:
     """Periodically poll device state and publish to MQTT."""
+    from .ayla_api import _apply_room_name_map
+
     prev_errors: dict[str, int] = {}
     first_poll = True
 
@@ -86,6 +89,17 @@ async def poll_loop(
                 device = SharkVacuum.from_skegox(raw)
                 if not device.rooms and device.dsn in ayla_room_data:
                     device.floor_id, device.rooms = ayla_room_data[device.dsn]
+                name_map = ayla_name_maps.get(device.dsn, {})
+                if name_map and device.rooms:
+                    device.room_name_map = name_map
+                    renamed = _apply_room_name_map(device.rooms, name_map)
+                    if renamed != device.rooms and first_poll:
+                        logger.info(
+                            "Renamed skegox rooms for %s (%s): %s -> %s",
+                            device.product_name, device.dsn,
+                            device.rooms, renamed,
+                        )
+                    device.rooms = renamed
                 skegox_snds.add(device.dsn)
                 devices_map[device.dsn] = device
                 await mqtt.publish_discovery(device)
@@ -206,8 +220,11 @@ async def run(config: Settings) -> None:
 
         # Prefetch Ayla room data once at startup as a fallback for
         # skegox devices whose Robot_Room_List shadow is empty (rooms
-        # configured before the skegox migration).
+        # configured before the skegox migration), and collect room-name
+        # maps from Mobile_App_Room_Definition for accounts where the
+        # display names are stored as user_room_name (issue #4).
         ayla_room_data: dict[str, tuple[str, list[str]]] = {}
+        ayla_name_maps: dict[str, dict[str, str]] = {}
         try:
             ayla_vacuums = await ayla_api.get_devices()
             for v in ayla_vacuums:
@@ -216,6 +233,8 @@ async def run(config: Settings) -> None:
                 if snd and v.rooms:
                     ayla_room_data[snd] = (v.floor_id, v.rooms)
                     logger.info("Ayla room fallback for %s: %s", snd, v.rooms)
+                if snd and v.room_name_map:
+                    ayla_name_maps[snd] = v.room_name_map
         except Exception:
             logger.warning("Failed to prefetch Ayla room data", exc_info=True)
 
@@ -225,7 +244,7 @@ async def run(config: Settings) -> None:
             command_event = asyncio.Event()
 
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, command_event))
+                tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_name_maps, command_event))
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
 
                 async def _shutdown_watcher() -> None:
