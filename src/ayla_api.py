@@ -263,6 +263,30 @@ class AylaApi:
                     p.get("property", {}).get("name") for p in props
                 }
                 vacuum.has_areas_v3 = "SET_AreasToClean_V3" in prop_names
+
+                if logger.isEnabledFor(logging.DEBUG):
+                    sorted_names = sorted(prop_names - {None})
+                    hint_keywords = ("room", "area", "zone", "map", "floor")
+                    hint_props = {
+                        k: vacuum._properties.get(k)
+                        for k in sorted_names
+                        if any(kw in k.lower() for kw in hint_keywords)
+                    }
+                    logger.debug(
+                        "Ayla shadow dump for %s (%s): "
+                        "GET_Robot_Room_List=%r, parsed_floor_id=%r, parsed_rooms=%r",
+                        vacuum.product_name, vacuum.dsn,
+                        vacuum._properties.get("GET_Robot_Room_List"),
+                        vacuum.floor_id, vacuum.rooms,
+                    )
+                    logger.debug(
+                        "Ayla property names for %s: %s",
+                        vacuum.product_name, sorted_names,
+                    )
+                    logger.debug(
+                        "Ayla room/area/zone/map/floor properties for %s: %s",
+                        vacuum.product_name, hint_props,
+                    )
             except AylaApiError:
                 logger.warning(
                     "Failed to fetch properties for %s", vacuum.dsn
