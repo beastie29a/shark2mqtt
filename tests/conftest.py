@@ -33,6 +33,13 @@ def mock_api():
 
 
 @pytest.fixture
+def mock_ayla_api():
+    ayla = AsyncMock()
+    ayla.get_devices.return_value = []
+    return ayla
+
+
+@pytest.fixture
 def mock_auth():
     auth = AsyncMock()
     auth.ensure_authenticated.return_value = None

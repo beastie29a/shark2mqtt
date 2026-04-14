@@ -159,6 +159,7 @@ async def test_send_command_with_toplevel_params():
     handler.clean_rooms.assert_awaited_once_with(
         dsn, rooms=["Kitchen"], floor_id="FLOOR1",
         clean_type="dry", clean_count=1, mode="UserRoom",
+        use_v3=False,
     )
 
 
@@ -180,6 +181,7 @@ async def test_send_command_with_dict_params():
     handler.clean_rooms.assert_awaited_once_with(
         dsn, rooms=["Kitchen"], floor_id="FLOOR1",
         clean_type="dry", clean_count=1, mode="UserRoom",
+        use_v3=False,
     )
 
 
@@ -204,6 +206,7 @@ async def test_clean_room_button_normal_mode():
     handler.clean_rooms.assert_awaited_once_with(
         dsn, rooms=["Kitchen"], floor_id="FLOOR1",
         clean_type="dry", clean_count=1, mode="UserRoom",
+        use_v3=False,
     )
 
 
@@ -228,6 +231,7 @@ async def test_clean_room_button_matrix_mode():
     handler.clean_rooms.assert_awaited_once_with(
         dsn, rooms=["Kitchen"], floor_id="FLOOR1",
         clean_type="dry", clean_count=2, mode="UltraClean",
+        use_v3=False,
     )
 
 
