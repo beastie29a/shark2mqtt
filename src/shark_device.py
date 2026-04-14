@@ -104,6 +104,38 @@ class SharkVacuum:
                     pass
 
         vac.api_backend = "skegox"
+
+        if logger.isEnabledFor(logging.DEBUG):
+            name = metadata.get("deviceName", vac.dsn)
+            raw_room_list = reported.get("Robot_Room_List", {})
+            raw_v3 = reported.get("AreasToClean_V3", {})
+            raw_v2 = reported.get("AreasToClean_V2", {})
+            raw_atc = reported.get("Areas_To_Clean", {})
+            def _val(x: Any) -> Any:
+                return x.get("value", x) if isinstance(x, dict) else x
+            prop_names = sorted(reported.keys())
+            hint_keywords = ("room", "area", "zone", "map", "floor")
+            hint_props = {
+                k: _val(reported[k])
+                for k in prop_names
+                if any(kw in k.lower() for kw in hint_keywords)
+            }
+            logger.debug(
+                "Shadow dump for %s (%s): "
+                "Robot_Room_List=%r, AreasToClean_V3=%r, AreasToClean_V2=%r, "
+                "Areas_To_Clean=%r, parsed_floor_id=%r, parsed_rooms=%r",
+                name, vac.dsn,
+                _val(raw_room_list), _val(raw_v3), _val(raw_v2),
+                _val(raw_atc), vac.floor_id, vac.rooms,
+            )
+            logger.debug(
+                "Shadow property names for %s: %s", name, prop_names,
+            )
+            logger.debug(
+                "Room/area/zone/map/floor properties for %s: %s",
+                name, hint_props,
+            )
+
         return vac
 
     def update_properties(self, properties: list[dict[str, Any]]) -> None:
