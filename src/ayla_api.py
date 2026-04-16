@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import aiohttp
 from tenacity import (
@@ -44,15 +44,15 @@ _AUTH_HEADER = "auth_token {}"
 _REFRESH_BUFFER = timedelta(minutes=5)
 
 
-def _apply_room_name_map(
-    rooms: list[str], name_map: dict[str, str],
-) -> list[str]:
-    """Rewrite rooms through a name map, passing unknown entries through.
+class MardData(NamedTuple):
+    """Parsed Mobile_App_Room_Definition data."""
 
-    Empty mapped values are treated as unknown so a `user_room_name: ""`
-    entry can never erase a room's name.
-    """
-    return [name_map.get(r) or r for r in rooms]
+    name_map: dict[str, str]
+    rooms: list[str]
+    floor_id: str | None
+
+
+_EMPTY_MARD = MardData({}, [], None)
 
 
 class AylaApi:
@@ -275,21 +275,15 @@ class AylaApi:
                 }
                 vacuum.has_areas_v3 = "SET_AreasToClean_V3" in prop_names
 
-                # Build room-name map from Mobile_App_Room_Definition
-                # and apply it to any placeholder names (AZ_N, etc.)
-                # in vacuum.rooms. See issue #4.
-                vacuum.room_name_map = await self._fetch_room_name_map(vacuum)
-                if vacuum.room_name_map and vacuum.rooms:
-                    renamed = _apply_room_name_map(
-                        vacuum.rooms, vacuum.room_name_map,
-                    )
-                    if renamed != vacuum.rooms:
-                        logger.info(
-                            "Renamed Ayla rooms for %s (%s): %s -> %s",
-                            vacuum.product_name, vacuum.dsn,
-                            vacuum.rooms, renamed,
-                        )
-                        vacuum.rooms = renamed
+                # Use MARD as authoritative room source (issue #4).
+                # MARD has the complete, correct room list with display
+                # names; Robot_Room_List may have phantoms or placeholders.
+                mard = await self._fetch_mard(vacuum)
+                vacuum.room_name_map = mard.name_map
+                if mard.rooms:
+                    vacuum.rooms = mard.rooms
+                if mard.floor_id:
+                    vacuum.floor_id = mard.floor_id
 
                 if logger.isEnabledFor(logging.DEBUG):
                     sorted_names = sorted(prop_names - {None})
@@ -345,24 +339,28 @@ class AylaApi:
             logger.debug("File datapoint fetch failed for %s", dp_url, exc_info=True)
             return None
 
-    async def _fetch_room_name_map(
+    async def _fetch_mard(
         self, vacuum: SharkVacuum,
-    ) -> dict[str, str]:
-        """Build a {robot_room_name -> display_name} map from Mobile_App_Room_Definition.
+    ) -> MardData:
+        """Parse Mobile_App_Room_Definition into a name map, room list, and floor_id.
 
-        For each UserRoom area in the file, maps robot_room_name to
-        user_room_name (if non-empty) or robot_room_name itself. The
-        resulting map is an identity mapping for accounts where the
-        Shark app stored display names in robot_room_name, and a true
-        rewrite for accounts where display names live in
-        user_room_name while robot_room_name holds AZ_N placeholders.
+        For each UserRoom area, builds:
+        - name_map: {robot_room_name -> display_name} for diagnostic use
+        - rooms: display names of all UserRoom entries (the authoritative room list)
+        - floor_id: top-level floor_id from the MARD file, if present
+
+        Display name = user_room_name when non-empty, else robot_room_name.
+        This is an identity mapping for accounts where robot_room_name
+        already holds display names, and a rewrite for accounts where
+        display names are in user_room_name while robot_room_name holds
+        AZ_N placeholders.
 
         See issue #4.
         """
         dp_url = vacuum._properties.get("Mobile_App_Room_Definition")
         body = await self._fetch_file_datapoint(dp_url)
         if not body:
-            return {}
+            return _EMPTY_MARD
         try:
             parsed = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -370,9 +368,10 @@ class AylaApi:
                 "Mobile_App_Room_Definition for %s: not valid JSON",
                 vacuum.product_name,
             )
-            return {}
+            return _EMPTY_MARD
 
         name_map: dict[str, str] = {}
+        rooms: list[str] = []
         for area in parsed.get("areas", []):
             meta = area.get("area_meta_data", "")
             if not meta.startswith("UserRoom:"):
@@ -381,7 +380,18 @@ class AylaApi:
             user_name = area.get("user_room_name", "") or ""
             if not robot_name:
                 continue
-            name_map[robot_name] = user_name or robot_name
+            display_name = user_name or robot_name
+            name_map[robot_name] = display_name
+            rooms.append(display_name)
+
+        mard_floor_id = parsed.get("floor_id")
+        if isinstance(mard_floor_id, str) and mard_floor_id:
+            logger.debug(
+                "MARD floor_id for %s (%s): %s",
+                vacuum.product_name, vacuum.dsn, mard_floor_id,
+            )
+        else:
+            mard_floor_id = None
 
         non_identity = {k: v for k, v in name_map.items() if k != v}
         if non_identity:
@@ -394,7 +404,14 @@ class AylaApi:
                 "Room name map for %s (%s) is identity (%d entries)",
                 vacuum.product_name, vacuum.dsn, len(name_map),
             )
-        return name_map
+
+        if rooms:
+            logger.info(
+                "MARD rooms for %s (%s): %s",
+                vacuum.product_name, vacuum.dsn, rooms,
+            )
+
+        return MardData(name_map, rooms, mard_floor_id)
 
     async def _debug_dump_file_datapoints(self, vacuum: SharkVacuum) -> None:
         """DEBUG helper: fetch and log selected Ayla file-type datapoints.
@@ -481,8 +498,14 @@ class AylaApi:
             "MARD top-level keys for %s: %s",
             vacuum.product_name, sorted(parsed.keys()),
         )
+        floor_id = parsed.get("floor_id")
+        if floor_id:
+            logger.debug(
+                "MARD top-level floor_id for %s: %s",
+                vacuum.product_name, floor_id,
+            )
         for key, value in parsed.items():
-            if key == "areas":
+            if key in ("areas", "floor_id"):
                 continue
             if isinstance(value, (list, dict)):
                 logger.debug(
