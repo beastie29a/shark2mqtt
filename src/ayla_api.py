@@ -424,6 +424,9 @@ class AylaApi:
                 )
                 continue
 
+            if prop == "Mobile_App_Room_Definition":
+                self._debug_dump_mard_structure(vacuum, body)
+
             try:
                 text = body.decode("utf-8")
                 if text.lstrip().startswith(("{", "[")):
@@ -446,6 +449,79 @@ class AylaApi:
                     "File datapoint %s for %s (binary, %d bytes, first 64 hex): %s",
                     prop, vacuum.product_name, len(body), body[:64].hex(),
                 )
+
+    def _debug_dump_mard_structure(
+        self, vacuum: SharkVacuum, body: bytes,
+    ) -> None:
+        """DEBUG helper: structural summary of Mobile_App_Room_Definition.
+
+        The MARD file can be hundreds of KB and the text dump truncates
+        at 4KB, which is not enough to see every area. This emits a
+        compact structural view (top-level keys, area prefixes, and one
+        line per area sans coordinate data) so we can investigate
+        placeholder-zone-ID reports like issue #4 without being blinded
+        by points arrays.
+        """
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            logger.debug(
+                "MARD structural dump for %s: not valid JSON",
+                vacuum.product_name,
+            )
+            return
+        if not isinstance(parsed, dict):
+            logger.debug(
+                "MARD structural dump for %s: top-level is %s, not dict",
+                vacuum.product_name, type(parsed).__name__,
+            )
+            return
+
+        logger.debug(
+            "MARD top-level keys for %s: %s",
+            vacuum.product_name, sorted(parsed.keys()),
+        )
+        for key, value in parsed.items():
+            if key == "areas":
+                continue
+            if isinstance(value, (list, dict)):
+                logger.debug(
+                    "MARD top-level %s for %s: %s (len=%d)",
+                    key, vacuum.product_name,
+                    type(value).__name__, len(value),
+                )
+
+        areas = parsed.get("areas")
+        if not isinstance(areas, list):
+            logger.debug(
+                "MARD areas for %s: missing or not a list",
+                vacuum.product_name,
+            )
+            return
+
+        prefix_counts: dict[str, int] = {}
+        for area in areas:
+            if not isinstance(area, dict):
+                continue
+            meta = area.get("area_meta_data", "") or ""
+            prefix = meta.split(":", 1)[0] if ":" in meta else meta or "(none)"
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+        logger.debug(
+            "MARD areas for %s: total=%d, meta_data prefixes=%s",
+            vacuum.product_name, len(areas), prefix_counts,
+        )
+
+        for area in areas:
+            if not isinstance(area, dict):
+                continue
+            logger.debug(
+                "MARD area for %s: meta=%r robot=%r user=%r uuid=%r",
+                vacuum.product_name,
+                area.get("area_meta_data"),
+                area.get("robot_room_name"),
+                area.get("user_room_name"),
+                area.get("uuid"),
+            )
 
     # --- Commands ---
 
