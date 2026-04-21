@@ -224,6 +224,61 @@ class SkegoxApi:
                 devices.append(full)
         return devices
 
+    async def fetch_property_file(
+        self, snd: str, property_name: str,
+    ) -> bytes | None:
+        """Fetch a file-type property's content from skegox.
+
+        Two requests: a wrapper GET that returns a presigned S3 URL,
+        then a follow-up GET on the presigned URL for the actual bytes.
+        Returns None if the wrapper has no files or any step fails.
+        """
+        if not self._household_id:
+            raise SharkAuthError("No household ID set")
+        path = (
+            f"/devicesEndUserController/{self._household_id}"
+            f"/devices/{snd}/property-files?properties={property_name}"
+        )
+        try:
+            wrapper = await self._request("GET", path)
+        except Exception:
+            logger.debug(
+                "Skegox property-files wrapper fetch failed for %s/%s",
+                snd, property_name, exc_info=True,
+            )
+            return None
+        files = wrapper.get("files") if isinstance(wrapper, dict) else None
+        if not files:
+            logger.debug(
+                "Skegox property-files for %s/%s: no files (count=%s)",
+                snd, property_name,
+                wrapper.get("count") if isinstance(wrapper, dict) else "?",
+            )
+            return None
+        presigned = files[0].get("presignedUrl")
+        if not presigned:
+            logger.debug(
+                "Skegox property-files for %s/%s: no presignedUrl",
+                snd, property_name,
+            )
+            return None
+        try:
+            session = await self._get_session()
+            async with session.get(presigned) as resp:
+                if resp.status >= 300:
+                    logger.debug(
+                        "Presigned URL fetch for %s/%s returned %d",
+                        snd, property_name, resp.status,
+                    )
+                    return None
+                return await resp.read()
+        except Exception:
+            logger.debug(
+                "Presigned URL fetch failed for %s/%s",
+                snd, property_name, exc_info=True,
+            )
+            return None
+
     # --- Commands ---
 
     async def set_desired_property(

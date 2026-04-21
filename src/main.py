@@ -9,7 +9,7 @@ import signal
 
 from typing import Any
 
-from .ayla_api import AylaApi, MardData
+from .ayla_api import AylaApi, MardData, debug_dump_mard_structure
 from .config import Settings
 from .exc import SharkAuthError
 from .mqtt_client import MqttClient
@@ -101,6 +101,36 @@ async def poll_loop(
                         device.floor_id = mard.floor_id
                 elif not device.rooms and device.dsn in ayla_room_data:
                     device.floor_id, device.rooms = ayla_room_data[device.dsn]
+                # DEBUG: fetch skegox MARD and dump structure for comparison
+                # against Ayla MARD. See issue #4. Only on first poll to
+                # avoid hammering S3 presigned URLs every cycle.
+                if first_poll and logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        skegox_mard_body = await api.fetch_property_file(
+                            device.dsn, "MARD",
+                        )
+                        if skegox_mard_body:
+                            logger.debug(
+                                "Skegox MARD fetched for %s (%s): %d bytes",
+                                device.product_name, device.dsn,
+                                len(skegox_mard_body),
+                            )
+                            debug_dump_mard_structure(
+                                skegox_mard_body,
+                                device.product_name,
+                                source="Skegox MARD",
+                            )
+                        else:
+                            logger.debug(
+                                "Skegox MARD for %s (%s): not available",
+                                device.product_name, device.dsn,
+                            )
+                    except Exception:
+                        logger.debug(
+                            "Skegox MARD fetch failed for %s",
+                            device.product_name, exc_info=True,
+                        )
+
                 skegox_snds.add(device.dsn)
                 devices_map[device.dsn] = device
                 await mqtt.publish_discovery(device)
