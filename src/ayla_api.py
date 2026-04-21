@@ -55,6 +55,64 @@ class MardData(NamedTuple):
 _EMPTY_MARD = MardData({}, [], None)
 
 
+def parse_mard(
+    body: bytes, product_name: str, dsn: str, source: str = "MARD",
+) -> MardData:
+    """Parse a MARD file body into name_map, rooms, and floor_id.
+
+    Display name = user_room_name when non-empty, else robot_room_name.
+    On accounts where robot_room_name already holds display names the
+    map is identity; on accounts with AZ_N placeholders it rewrites
+    through user_room_name.
+
+    `source` tags info/debug log lines so the caller can distinguish
+    Ayla MARD from Skegox MARD. See issue #4.
+    """
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        logger.debug("%s for %s: not valid JSON", source, product_name)
+        return _EMPTY_MARD
+
+    name_map: dict[str, str] = {}
+    rooms: list[str] = []
+    for area in parsed.get("areas", []):
+        meta = area.get("area_meta_data", "")
+        if not meta.startswith("UserRoom:"):
+            continue
+        robot_name = area.get("robot_room_name", "") or ""
+        user_name = area.get("user_room_name", "") or ""
+        if not robot_name:
+            continue
+        display_name = user_name or robot_name
+        name_map[robot_name] = display_name
+        rooms.append(display_name)
+
+    mard_floor_id = parsed.get("floor_id")
+    if not (isinstance(mard_floor_id, str) and mard_floor_id):
+        mard_floor_id = None
+
+    non_identity = {k: v for k, v in name_map.items() if k != v}
+    if non_identity:
+        logger.info(
+            "%s name map for %s (%s) contains rewrites: %s",
+            source, product_name, dsn, non_identity,
+        )
+    else:
+        logger.debug(
+            "%s name map for %s (%s) is identity (%d entries)",
+            source, product_name, dsn, len(name_map),
+        )
+
+    if rooms:
+        logger.info(
+            "%s rooms for %s (%s): %s",
+            source, product_name, dsn, rooms,
+        )
+
+    return MardData(name_map, rooms, mard_floor_id)
+
+
 def debug_dump_mard_structure(
     body: bytes, label: str, source: str = "MARD",
 ) -> None:
@@ -415,76 +473,12 @@ class AylaApi:
     async def _fetch_mard(
         self, vacuum: SharkVacuum,
     ) -> MardData:
-        """Parse Mobile_App_Room_Definition into a name map, room list, and floor_id.
-
-        For each UserRoom area, builds:
-        - name_map: {robot_room_name -> display_name} for diagnostic use
-        - rooms: display names of all UserRoom entries (the authoritative room list)
-        - floor_id: top-level floor_id from the MARD file, if present
-
-        Display name = user_room_name when non-empty, else robot_room_name.
-        This is an identity mapping for accounts where robot_room_name
-        already holds display names, and a rewrite for accounts where
-        display names are in user_room_name while robot_room_name holds
-        AZ_N placeholders.
-
-        See issue #4.
-        """
+        """Fetch and parse Ayla Mobile_App_Room_Definition. See issue #4."""
         dp_url = vacuum._properties.get("Mobile_App_Room_Definition")
         body = await self._fetch_file_datapoint(dp_url)
         if not body:
             return _EMPTY_MARD
-        try:
-            parsed = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            logger.debug(
-                "Mobile_App_Room_Definition for %s: not valid JSON",
-                vacuum.product_name,
-            )
-            return _EMPTY_MARD
-
-        name_map: dict[str, str] = {}
-        rooms: list[str] = []
-        for area in parsed.get("areas", []):
-            meta = area.get("area_meta_data", "")
-            if not meta.startswith("UserRoom:"):
-                continue
-            robot_name = area.get("robot_room_name", "") or ""
-            user_name = area.get("user_room_name", "") or ""
-            if not robot_name:
-                continue
-            display_name = user_name or robot_name
-            name_map[robot_name] = display_name
-            rooms.append(display_name)
-
-        mard_floor_id = parsed.get("floor_id")
-        if isinstance(mard_floor_id, str) and mard_floor_id:
-            logger.debug(
-                "MARD floor_id for %s (%s): %s",
-                vacuum.product_name, vacuum.dsn, mard_floor_id,
-            )
-        else:
-            mard_floor_id = None
-
-        non_identity = {k: v for k, v in name_map.items() if k != v}
-        if non_identity:
-            logger.info(
-                "Room name map for %s (%s) contains rewrites: %s",
-                vacuum.product_name, vacuum.dsn, non_identity,
-            )
-        else:
-            logger.debug(
-                "Room name map for %s (%s) is identity (%d entries)",
-                vacuum.product_name, vacuum.dsn, len(name_map),
-            )
-
-        if rooms:
-            logger.info(
-                "MARD rooms for %s (%s): %s",
-                vacuum.product_name, vacuum.dsn, rooms,
-            )
-
-        return MardData(name_map, rooms, mard_floor_id)
+        return parse_mard(body, vacuum.product_name, vacuum.dsn, source="Ayla MARD")
 
     async def _debug_dump_file_datapoints(self, vacuum: SharkVacuum) -> None:
         """DEBUG helper: fetch and log selected Ayla file-type datapoints.

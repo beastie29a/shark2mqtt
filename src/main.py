@@ -9,7 +9,7 @@ import signal
 
 from typing import Any
 
-from .ayla_api import AylaApi, MardData, debug_dump_mard_structure
+from .ayla_api import AylaApi, MardData, debug_dump_mard_structure, parse_mard
 from .config import Settings
 from .exc import SharkAuthError
 from .mqtt_client import MqttClient
@@ -60,6 +60,35 @@ class CommandRouter:
         )
 
 
+async def _fetch_skegox_mard(
+    api: SkegoxApi, dsn: str, product_name: str,
+) -> MardData:
+    """Fetch and parse the skegox MARD file for a device.
+
+    Skegox exposes its own MARD file at the property-files endpoint
+    (two-hop fetch: wrapper returns a presigned S3 URL). Same schema
+    as Ayla MARD but can have a different floor_id and different
+    AZ_N -> name mappings on skegox-migrated accounts. See issue #4.
+    """
+    try:
+        body = await api.fetch_property_file(dsn, "MARD")
+    except Exception:
+        logger.debug("Skegox MARD fetch failed for %s", product_name, exc_info=True)
+        return MardData({}, [], None)
+    if not body:
+        logger.debug(
+            "Skegox MARD for %s (%s): not available", product_name, dsn,
+        )
+        return MardData({}, [], None)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Skegox MARD fetched for %s (%s): %d bytes",
+            product_name, dsn, len(body),
+        )
+        debug_dump_mard_structure(body, product_name, source="Skegox MARD")
+    return parse_mard(body, product_name, dsn, source="Skegox MARD")
+
+
 async def poll_loop(
     api: SkegoxApi,
     ayla_api: AylaApi,
@@ -74,6 +103,10 @@ async def poll_loop(
     """Periodically poll device state and publish to MQTT."""
     prev_errors: dict[str, int] = {}
     first_poll = True
+    # Skegox MARD cache — fetched once per session per device. MARD
+    # only changes on room edits/map saves, not per poll, so re-fetching
+    # every cycle would waste API calls and S3 presigned URLs.
+    skegox_mard_cache: dict[str, MardData] = {}
 
     while True:
         any_active = False
@@ -85,50 +118,58 @@ async def poll_loop(
             raw_devices = await api.get_all_devices()
             for raw in raw_devices:
                 device = SharkVacuum.from_skegox(raw)
-                # Use MARD as authoritative room source when available.
-                # Skegox Robot_Room_List may have phantoms or
-                # placeholders (issue #4).
-                mard = ayla_mard.get(device.dsn)
-                if mard and mard.rooms:
+
+                # Room source priority (issue #4):
+                # 1. Skegox MARD — authoritative for migrated devices,
+                #    has current floor_id and current AZ_N -> name map.
+                # 2. Ayla MARD — authoritative for pure-Ayla accounts.
+                #    Stale on migrated accounts (frozen at migration).
+                # 3. Ayla Robot_Room_List fallback (shadow-parsed).
+                # 4. Skegox Robot_Room_List (already on device from
+                #    from_skegox, left as-is when nothing else applies).
+                skegox_mard = skegox_mard_cache.get(device.dsn)
+                if skegox_mard is None:
+                    skegox_mard = await _fetch_skegox_mard(
+                        api, device.dsn, device.product_name,
+                    )
+                    # Cache only on success so a transient failure can be
+                    # retried next poll.
+                    if skegox_mard.rooms:
+                        skegox_mard_cache[device.dsn] = skegox_mard
+                ayla = ayla_mard.get(device.dsn)
+
+                if skegox_mard.rooms:
                     if first_poll:
                         logger.info(
-                            "Using MARD rooms for %s (%s): %s",
-                            device.product_name, device.dsn, mard.rooms,
+                            "Using Skegox MARD rooms for %s (%s): %s "
+                            "(floor_id=%s)",
+                            device.product_name, device.dsn,
+                            skegox_mard.rooms, skegox_mard.floor_id,
                         )
-                    device.rooms = mard.rooms
-                    device.room_name_map = mard.name_map
-                    if mard.floor_id:
-                        device.floor_id = mard.floor_id
+                    device.rooms = skegox_mard.rooms
+                    device.room_name_map = skegox_mard.name_map
+                    if skegox_mard.floor_id:
+                        device.floor_id = skegox_mard.floor_id
+                elif ayla and ayla.rooms:
+                    if first_poll:
+                        logger.info(
+                            "Using Ayla MARD rooms for %s (%s): %s "
+                            "(floor_id=%s)",
+                            device.product_name, device.dsn,
+                            ayla.rooms, ayla.floor_id,
+                        )
+                    device.rooms = ayla.rooms
+                    device.room_name_map = ayla.name_map
+                    if ayla.floor_id:
+                        device.floor_id = ayla.floor_id
                 elif not device.rooms and device.dsn in ayla_room_data:
                     device.floor_id, device.rooms = ayla_room_data[device.dsn]
-                # DEBUG: fetch skegox MARD and dump structure for comparison
-                # against Ayla MARD. See issue #4. Only on first poll to
-                # avoid hammering S3 presigned URLs every cycle.
-                if first_poll and logger.isEnabledFor(logging.DEBUG):
-                    try:
-                        skegox_mard_body = await api.fetch_property_file(
-                            device.dsn, "MARD",
-                        )
-                        if skegox_mard_body:
-                            logger.debug(
-                                "Skegox MARD fetched for %s (%s): %d bytes",
-                                device.product_name, device.dsn,
-                                len(skegox_mard_body),
-                            )
-                            debug_dump_mard_structure(
-                                skegox_mard_body,
-                                device.product_name,
-                                source="Skegox MARD",
-                            )
-                        else:
-                            logger.debug(
-                                "Skegox MARD for %s (%s): not available",
-                                device.product_name, device.dsn,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "Skegox MARD fetch failed for %s",
-                            device.product_name, exc_info=True,
+                    if first_poll:
+                        logger.info(
+                            "Using Ayla Robot_Room_List fallback for "
+                            "%s (%s): %s (floor_id=%s)",
+                            device.product_name, device.dsn,
+                            device.rooms, device.floor_id,
                         )
 
                 skegox_snds.add(device.dsn)
