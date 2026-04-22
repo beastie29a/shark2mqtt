@@ -42,6 +42,22 @@ class SharkVacuum:
         self.api_backend: str = "ayla"
         self.room_name_map: dict[str, str] = {}
 
+    def to_robot_room_names(self, rooms: list[str]) -> list[str]:
+        """Reverse-map display names to robot_room_name values for the API.
+
+        Clean commands must send the `robot_room_name` (e.g. `AZ_1`) that
+        the device understands, not the human-readable display name we
+        publish to HA. For accounts where MARD has identity mapping
+        (robot_room_name == display name) this is a no-op. Unknown
+        rooms pass through unchanged.
+
+        See issue #4.
+        """
+        if not self.room_name_map:
+            return list(rooms)
+        reverse = {display: robot for robot, display in self.room_name_map.items()}
+        return [reverse.get(r, r) for r in rooms]
+
     @classmethod
     def from_skegox(cls, device_data: dict[str, Any]) -> SharkVacuum:
         """Create a SharkVacuum from skegox API response."""

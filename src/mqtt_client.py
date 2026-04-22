@@ -414,12 +414,20 @@ class MqttClient:
             api_mode, clean_count = "UserRoom", 1
 
         use_v3 = getattr(device, "has_areas_v3", False)
+        api_rooms = (
+            device.to_robot_room_names([room])
+            if device and hasattr(device, "to_robot_room_names")
+            else [room]
+        )
         await handler.clean_rooms(
-            device_id, rooms=[room], floor_id=floor_id,
+            device_id, rooms=api_rooms, floor_id=floor_id,
             clean_type="dry", clean_count=clean_count, mode=api_mode,
             use_v3=use_v3,
         )
-        logger.info("Room clean started: %s on %s (mode=%s)", room, device_id, mode)
+        logger.info(
+            "Room clean started: %s (api=%s) on %s (mode=%s)",
+            room, api_rooms, device_id, mode,
+        )
 
     @staticmethod
     async def _handle_send_command(
@@ -466,6 +474,11 @@ class MqttClient:
                 fid = device.floor_id
             return fid
 
+        def to_api_rooms(display_rooms: list[str]) -> list[str]:
+            if device and hasattr(device, "to_robot_room_names"):
+                return device.to_robot_room_names(display_rooms)
+            return list(display_rooms)
+
         if command == "clean_room":
             room = params.get("room", "")
             if not room:
@@ -476,7 +489,7 @@ class MqttClient:
                 logger.warning("clean_room: no floor_id available")
                 return
             await handler.clean_rooms(
-                device_id, rooms=[room], floor_id=floor_id,
+                device_id, rooms=to_api_rooms([room]), floor_id=floor_id,
                 clean_type=params.get("clean_type", "dry"),
                 clean_count=1, mode="UserRoom", use_v3=use_v3,
             )
@@ -491,7 +504,7 @@ class MqttClient:
                 logger.warning("matrix_clean: no floor_id available")
                 return
             await handler.clean_rooms(
-                device_id, rooms=[room], floor_id=floor_id,
+                device_id, rooms=to_api_rooms([room]), floor_id=floor_id,
                 clean_type=params.get("clean_type", "dry"),
                 clean_count=2, mode="UltraClean", use_v3=use_v3,
             )
@@ -506,7 +519,7 @@ class MqttClient:
                 logger.warning("clean_rooms: no floor_id available")
                 return
             await handler.clean_rooms(
-                device_id, rooms=rooms, floor_id=floor_id,
+                device_id, rooms=to_api_rooms(rooms), floor_id=floor_id,
                 clean_type=params.get("clean_type", "dry"),
                 clean_count=params.get("clean_count", 1),
                 mode=params.get("mode", "UserRoom"), use_v3=use_v3,
