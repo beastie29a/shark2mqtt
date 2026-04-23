@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import logging
 import signal
-
 from typing import Any
 
 from .ayla_api import AylaApi, MardData, debug_dump_mard_structure, parse_mard

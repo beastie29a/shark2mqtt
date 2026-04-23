@@ -16,7 +16,7 @@ import secrets
 import tempfile
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -160,29 +160,28 @@ class SharkAuth:
             "refresh_token": self._tokens.auth0_refresh_token,
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self._region.auth0_token_url, json=payload
-            ) as resp:
-                data = await resp.json()
-                if resp.status != 200:
-                    error = data.get("error", "unknown")
-                    desc = data.get("error_description", "")
-                    if resp.status == 429:
-                        raise SharkAuthLockedError(
-                            f"Auth0 rate limited: {error} {desc}"
-                        )
-                    raise SharkAuthError(
-                        f"Auth0 refresh failed ({resp.status}): {error} {desc}"
+        async with aiohttp.ClientSession() as session, session.post(
+            self._region.auth0_token_url, json=payload
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                error = data.get("error", "unknown")
+                desc = data.get("error_description", "")
+                if resp.status == 429:
+                    raise SharkAuthLockedError(
+                        f"Auth0 rate limited: {error} {desc}"
                     )
+                raise SharkAuthError(
+                    f"Auth0 refresh failed ({resp.status}): {error} {desc}"
+                )
 
-                self._tokens.auth0_id_token = data["id_token"]
-                self._tokens.auth0_access_token = data.get("access_token")
-                # Auth0 may rotate the refresh token
-                if "refresh_token" in data:
-                    self._tokens.auth0_refresh_token = data["refresh_token"]
-                self._save_tokens()
-                logger.info("Auth0 token refreshed successfully")
+            self._tokens.auth0_id_token = data["id_token"]
+            self._tokens.auth0_access_token = data.get("access_token")
+            # Auth0 may rotate the refresh token
+            if "refresh_token" in data:
+                self._tokens.auth0_refresh_token = data["refresh_token"]
+            self._save_tokens()
+            logger.info("Auth0 token refreshed successfully")
 
     async def _browser_authenticate(self) -> None:
         """Authenticate via headless Chromium browser with PKCE.
@@ -413,25 +412,24 @@ class SharkAuth:
             "redirect_uri": self._region.auth0_redirect_uri,
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self._region.auth0_token_url, json=payload
-            ) as resp:
-                data = await resp.json()
-                if resp.status != 200:
-                    error = data.get("error", "unknown")
-                    desc = data.get("error_description", "")
-                    raise SharkAuthError(
-                        f"Auth0 code exchange failed ({resp.status}): {error} {desc}"
-                    )
+        async with aiohttp.ClientSession() as session, session.post(
+            self._region.auth0_token_url, json=payload
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                error = data.get("error", "unknown")
+                desc = data.get("error_description", "")
+                raise SharkAuthError(
+                    f"Auth0 code exchange failed ({resp.status}): {error} {desc}"
+                )
 
-                if not self._tokens:
-                    self._tokens = TokenData()
-                self._tokens.auth0_id_token = data["id_token"]
-                self._tokens.auth0_access_token = data.get("access_token")
-                self._tokens.auth0_refresh_token = data.get("refresh_token")
-                self._save_tokens()
-                logger.info("Auth0 code exchange successful")
+            if not self._tokens:
+                self._tokens = TokenData()
+            self._tokens.auth0_id_token = data["id_token"]
+            self._tokens.auth0_access_token = data.get("access_token")
+            self._tokens.auth0_refresh_token = data.get("refresh_token")
+            self._save_tokens()
+            logger.info("Auth0 code exchange successful")
 
     # --- Token persistence ---
 
@@ -454,7 +452,7 @@ class SharkAuth:
         if not self._tokens:
             return
 
-        self._tokens.saved_at = datetime.now(timezone.utc).isoformat()
+        self._tokens.saved_at = datetime.now(UTC).isoformat()
         self._token_path.parent.mkdir(parents=True, exist_ok=True)
 
         fd, tmp_path = tempfile.mkstemp(
@@ -476,7 +474,7 @@ class SharkAuth:
 
     def _check_browser_rate_limit(self) -> None:
         """Check if we've exceeded browser launch limits."""
-        today = datetime.now(timezone.utc).timetuple().tm_yday
+        today = datetime.now(UTC).timetuple().tm_yday
         if today != self._browser_launch_day:
             self._browser_launches_today = 0
             self._browser_launch_day = today
@@ -489,7 +487,7 @@ class SharkAuth:
 
     def _record_browser_launch(self) -> None:
         """Record a browser launch for rate limiting."""
-        today = datetime.now(timezone.utc).timetuple().tm_yday
+        today = datetime.now(UTC).timetuple().tm_yday
         if today != self._browser_launch_day:
             self._browser_launches_today = 0
             self._browser_launch_day = today

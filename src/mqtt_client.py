@@ -51,7 +51,7 @@ class MqttClient:
         logger.info("MQTT connected to %s:%d", self._config.mqtt_host, self._config.mqtt_port)
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         if self._client:
             await self._publish(f"{self._prefix}/status", {"state": "offline"}, retain=True)
             await self._client.__aexit__(*args)

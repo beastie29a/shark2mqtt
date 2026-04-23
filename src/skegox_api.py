@@ -336,6 +336,7 @@ class SkegoxApi:
             mode: "UserRoom" for normal, "UltraClean" for matrix clean.
             use_v3: True for devices with AreasToClean_V3 (dict format),
                     False for devices using Areas_To_Clean (list format).
+
         """
         if use_v3:
             areas_payload = json.dumps({

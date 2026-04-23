@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import aiohttp
@@ -211,7 +211,7 @@ class AylaApi:
     def token_expiring_soon(self) -> bool:
         if not self._token_expiry:
             return True
-        return datetime.now(timezone.utc) >= self._token_expiry - _REFRESH_BUFFER
+        return datetime.now(UTC) >= self._token_expiry - _REFRESH_BUFFER
 
     # --- Authentication ---
 
@@ -240,7 +240,7 @@ class AylaApi:
         self._refresh_token = data["refresh_token"]
         # Ayla tokens typically expire in 1 hour
         expires_in = data.get("expires_in", 3600)
-        self._token_expiry = datetime.now(timezone.utc) + timedelta(
+        self._token_expiry = datetime.now(UTC) + timedelta(
             seconds=expires_in
         )
 
@@ -274,7 +274,7 @@ class AylaApi:
         self._access_token = data["access_token"]
         self._refresh_token = data["refresh_token"]
         expires_in = data.get("expires_in", 3600)
-        self._token_expiry = datetime.now(timezone.utc) + timedelta(
+        self._token_expiry = datetime.now(UTC) + timedelta(
             seconds=expires_in
         )
 
