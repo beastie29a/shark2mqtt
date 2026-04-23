@@ -1,7 +1,9 @@
-import pytest
-import asyncio
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from src.mqtt_client import MqttClient
+
 
 @pytest.mark.asyncio
 async def test_mqtt_client_init():
@@ -18,7 +20,7 @@ async def test_mqtt_client_publish():
     with patch('src.mqtt_client.AsyncClient') as mock_client:
         mock_instance = mock_client.return_value
         mock_instance.publish = AsyncMock()
-        
+
         client = MqttClient("broker", 1883, "user", "pass")
         await client.publish("topic", "message")
         mock_instance.publish.assert_called_once()

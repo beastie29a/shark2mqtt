@@ -1,7 +1,7 @@
 """Test Ayla API."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch, PropertyMock
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
 
