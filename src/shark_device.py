@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -17,6 +18,7 @@ from .const import (
     PROP_GET_OPERATING_MODE,
     PROP_GET_POWER_MODE,
     PROP_GET_ROBOT_FIRMWARE_VERSION,
+    PROP_GET_ROBOT_ROOM_LIST,
     PROP_GET_RSSI,
     OperatingMode,
     PowerMode,
@@ -29,6 +31,7 @@ class SharkVacuum:
     """Represents a Shark robot vacuum with its current state."""
 
     def __init__(self, device_data: dict[str, Any]) -> None:
+        """Initialize a SharkVacuum from a device data dict."""
         self.dsn: str = device_data["dsn"]
         self.product_name: str = device_data.get("product_name", "Shark Robot")
         self.model: str = device_data.get("model", "Unknown")
@@ -114,10 +117,9 @@ class SharkVacuum:
             atc_val = atc.get("value", atc) if isinstance(atc, dict) else atc
             if atc_val and isinstance(atc_val, str) and "floor_id" in atc_val:
                 try:
-                    import json as _json
-                    atc_data = _json.loads(atc_val)
+                    atc_data = json.loads(atc_val)
                     vac.floor_id = atc_data.get("floor_id", "")
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     pass
 
         vac.api_backend = "skegox"
@@ -175,13 +177,14 @@ class SharkVacuum:
         val = self._properties.get(name, default)
         try:
             return int(val)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default
 
     # --- State properties ---
 
     @property
     def operating_mode(self) -> OperatingMode | None:
+        """Get the current operating mode as an OperatingMode enum, or None if unknown."""
         val = self._get_int_prop(PROP_GET_OPERATING_MODE, -1)
         try:
             return OperatingMode(val)
@@ -190,14 +193,17 @@ class SharkVacuum:
 
     @property
     def is_docked(self) -> bool:
+        """Determine if the device is currently docked."""
         return self._get_int_prop(PROP_GET_DOCKED_STATUS) == 1
 
     @property
     def error_code(self) -> int:
+        """Get the current error code as an integer."""
         return self._get_int_prop(PROP_GET_ERROR_CODE)
 
     @property
     def error_text(self) -> str:
+        """Get a human-readable error message based on the current error code."""
         return ERROR_CODES.get(self.error_code, f"Unknown error ({self.error_code})")
 
     @property
@@ -218,14 +224,17 @@ class SharkVacuum:
 
     @property
     def battery_level(self) -> int:
+        """Get the current battery level as an integer percentage."""
         return self._get_int_prop(PROP_GET_BATTERY_CAPACITY)
 
     @property
     def is_charging(self) -> bool:
+        """Determine if the device is currently charging."""
         return self._get_int_prop(PROP_GET_CHARGING_STATUS) == 1
 
     @property
     def power_mode(self) -> PowerMode | None:
+        """Get the current power mode as a PowerMode enum, or None if unknown."""
         val = self._get_int_prop(PROP_GET_POWER_MODE, -1)
         try:
             return PowerMode(val)
@@ -234,6 +243,7 @@ class SharkVacuum:
 
     @property
     def fan_speed(self) -> str:
+        """Get the current fan speed as a string for HA, based on power mode."""
         mode = self.power_mode
         if mode is None:
             return "normal"
@@ -241,20 +251,27 @@ class SharkVacuum:
 
     @property
     def rssi(self) -> int:
-        # Some models report RSSI as positive, others as negative dBm.
-        # Real WiFi RSSI is always ≤ 0 dBm, so normalize to negative.
-        return -abs(self._get_int_prop(PROP_GET_RSSI))
+        """Get the current Wi-Fi signal strength (RSSI) as an integer."""
+        return self._get_int_prop(PROP_GET_RSSI)
 
     @property
     def firmware_version(self) -> str:
+        """Get the current firmware version as a string."""
         return str(self._get_prop(PROP_GET_ROBOT_FIRMWARE_VERSION, ""))
 
     @property
+    def get_robot_room_list(self) -> str:
+        """Get the list of known rooms for this device."""
+        return self._properties.get(PROP_GET_ROBOT_ROOM_LIST, "")
+
+    @property
     def model_number(self) -> str:
+        """Get the device model number as a string."""
         return str(self._get_prop(PROP_GET_DEVICE_MODEL_NUMBER, self.model))
 
     @property
     def is_online(self) -> bool:
+        """Determine if the device is currently online based on connection status."""
         return self.connection_status == "Online"
 
     # --- MQTT payloads ---

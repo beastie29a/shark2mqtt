@@ -28,6 +28,7 @@ class CommandRouter:
         ayla: AylaApi,
         devices: dict[str, SharkVacuum],
     ) -> None:
+        """Initialize the CommandRouter with API clients and device map."""
         self._skegox = skegox
         self._ayla = ayla
         self._devices = devices
@@ -39,9 +40,11 @@ class CommandRouter:
         return self._skegox
 
     async def send_command(self, device_id: str, command: str) -> None:
+        """Send a command to the appropriate API for the given device."""
         await self._api_for(device_id).send_command(device_id, command)
 
     async def set_fan_speed(self, device_id: str, speed: str) -> None:
+        """Set fan speed for the given device."""
         await self._api_for(device_id).set_fan_speed(device_id, speed)
 
     async def clean_rooms(
@@ -54,8 +57,15 @@ class CommandRouter:
         mode: str = "UserRoom",
         use_v3: bool = False,
     ) -> None:
+        """Clean specified rooms on the given device."""
         await self._api_for(device_id).clean_rooms(
-            device_id, rooms, floor_id, clean_type, clean_count, mode, use_v3,
+            device_id,
+            rooms,
+            floor_id,
+            clean_type,
+            clean_count,
+            mode,
+            use_v3,
         )
 
 
@@ -187,30 +197,13 @@ async def poll_loop(
                 skegox_names = [d.product_name for d in devices_map.values()]
                 logger.info(
                     "Skegox returned %d device(s): %s",
-                    len(skegox_snds), skegox_names or "(none)",
+                    len(skegox_snds),
+                    skegox_names or "(none)",
                 )
-            if skegox_snds:
-                if first_poll:
-                    logger.info("Using skegox API, skipping Ayla")
-            else:
-                try:
-                    ayla_devices = await ayla_api.get_devices()
-                    if first_poll:
-                        ayla_names = [d.product_name for d in ayla_devices]
-                        logger.info(
-                            "Falling back to Ayla, found %d device(s): %s",
-                            len(ayla_devices), ayla_names or "(none)",
-                        )
-                    for device in ayla_devices:
-                        devices_map[device.dsn] = device
-                        await mqtt.publish_discovery(device)
-                        await mqtt.publish_state(device, prev_error=prev_errors)
-                        prev_errors[device.dsn] = device.error_code
-                        if device.ha_state != "docked":
-                            any_active = True
-                except Exception:
-                    logger.warning("Ayla device fetch failed", exc_info=True)
-
+            if not skegox_snds:
+                await _poll_ayla_devices(ayla_api, mqtt, devices_map, prev_errors, first_poll)
+            elif first_poll:
+                logger.info("Using skegox API, skipping Ayla")
             first_poll = False
 
         except SharkAuthError as e:
@@ -231,8 +224,36 @@ async def poll_loop(
             pass
 
 
+async def _poll_ayla_devices(
+    ayla_api: AylaApi,
+    mqtt: MqttClient,
+    devices_map: dict[str, SharkVacuum],
+    prev_errors: dict[str, int],
+    first_poll: bool,
+) -> None:
+    """Poll Ayla devices if skegox returned no devices."""
+    try:
+        ayla_devices = await ayla_api.get_devices()
+        if first_poll:
+            ayla_names = [d.product_name for d in ayla_devices]
+            logger.info(
+                "Falling back to Ayla, found %d device(s): %s",
+                len(ayla_devices),
+                ayla_names or "(none)",
+            )
+        for device in ayla_devices:
+            devices_map[device.dsn] = device
+            await mqtt.publish_discovery(device)
+            await mqtt.publish_state(device, prev_error=prev_errors)
+            prev_errors[device.dsn] = device.error_code
+            if device.ha_state != "docked":
+                pass
+    except Exception:
+        logger.exception("Ayla device fetch failed")
+
+
 async def run(config: Settings) -> None:
-    """Main run loop."""
+    """Run the main loop."""
     auth = SharkAuth(config)
     mqtt = MqttClient(config)
 
@@ -248,8 +269,7 @@ async def run(config: Settings) -> None:
             skegox_devices = await api.get_all_devices()
 
             all_devices: list[SharkVacuum] = []
-            for d in skegox_devices:
-                all_devices.append(SharkVacuum.from_skegox(d))
+            all_devices.extend(SharkVacuum.from_skegox(d) for d in skegox_devices)
 
             # Fall back to Ayla only when skegox has no devices
             if not all_devices:
@@ -262,7 +282,10 @@ async def run(config: Settings) -> None:
             for v in all_devices:
                 logger.info(
                     "  %s (%s) [%s]: battery=%d%%",
-                    v.product_name, v.dsn, v.api_backend, v.battery_level,
+                    v.product_name,
+                    v.dsn,
+                    v.api_backend,
+                    v.battery_level,
                 )
             await api.close()
             await ayla_api.close()
@@ -285,6 +308,11 @@ async def run(config: Settings) -> None:
         loop.add_signal_handler(sig, stop_event.set)
 
     router = CommandRouter(api, ayla_api, devices_map)
+
+    async def _shutdown_watcher() -> None:
+        await stop_event.wait()
+        logger.info("Shutdown signal received")
+        raise SystemExit(0)
 
     try:
         await auth.ensure_authenticated()
@@ -320,15 +348,9 @@ async def run(config: Settings) -> None:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event))
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
-
-                async def _shutdown_watcher() -> None:
-                    await stop_event.wait()
-                    logger.info("Shutdown signal received")
-                    raise SystemExit(0)
-
                 tg.create_task(_shutdown_watcher())
 
-    except (SystemExit, KeyboardInterrupt):
+    except SystemExit, KeyboardInterrupt:
         logger.info("Shutting down gracefully")
     finally:
         await api.close()
@@ -337,9 +359,7 @@ async def run(config: Settings) -> None:
 
 def main() -> None:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description="shark2mqtt — Shark vacuum to MQTT bridge"
-    )
+    parser = argparse.ArgumentParser(description="shark2mqtt — Shark vacuum to MQTT bridge")
     parser.add_argument(
         "--auth-once",
         action="store_true",

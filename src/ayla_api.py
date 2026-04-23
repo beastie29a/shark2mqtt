@@ -190,6 +190,7 @@ class AylaApi:
     """Async client for the Ayla Networks IoT API."""
 
     def __init__(self, config: Settings, auth: SharkAuth) -> None:
+        """Initialize the Ayla API client with settings and auth manager."""
         self._region: RegionConfig = REGIONS[config.shark_region]
         self._auth = auth
         self._access_token: str | None = None
@@ -203,12 +204,14 @@ class AylaApi:
         return self._session
 
     async def close(self) -> None:
+        """Close the underlying HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
 
     @property
     def token_expiring_soon(self) -> bool:
+        """Check if the Ayla access token is expiring soon."""
         if not self._token_expiry:
             return True
         return datetime.now(UTC) >= self._token_expiry - _REFRESH_BUFFER
@@ -394,7 +397,7 @@ class AylaApi:
                 vacuum.update_properties(props)
 
                 # Parse room list from GET_Robot_Room_List
-                room_list = vacuum._properties.get("GET_Robot_Room_List", "")
+                room_list = vacuum.get_robot_room_list()
                 if room_list and isinstance(room_list, str) and ":" in room_list:
                     parts = room_list.split(":")
                     vacuum.floor_id = parts[0]

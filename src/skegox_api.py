@@ -7,6 +7,7 @@ and API key are checked server-side.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import secrets
@@ -31,6 +32,7 @@ class SkegoxApi:
     """Async client for the SharkNinja cloud API."""
 
     def __init__(self, config: Settings, auth: SharkAuth) -> None:
+        """Initialize the SkegoxApi with config and authentication."""
         self._config = config
         self._auth = auth
         self._region = REGIONS[config.shark_region]
@@ -44,6 +46,7 @@ class SkegoxApi:
         return self._session
 
     async def close(self) -> None:
+        """Close the HTTP session when done."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
@@ -92,7 +95,6 @@ class SkegoxApi:
     async def discover(self) -> None:
         """Discover user ID from JWT and household ID from skegox API."""
         logger.info("Using skegox endpoint: %s", self._region.skegox_base)
-        import base64
         token = self._auth.id_token
         if not token:
             raise SharkAuthError("No id_token available")
@@ -120,10 +122,10 @@ class SkegoxApi:
                 )
 
     async def auto_discover_household(self) -> str | None:
-        """Auto-discover household ID by querying Ayla for a device SND,
-        then probing skegox with common household ID patterns.
+        """Return the household ID if found, or None.
 
-        Returns the household ID if found, or None.
+        Auto-discover household ID by querying Ayla for a device SND,
+        then probing skegox with common household ID patterns.
         """
         # Get a SND from Ayla
         session = await self._get_session()
@@ -188,7 +190,7 @@ class SkegoxApi:
                             return None
 
         except Exception:
-            logger.debug("Auto-discover failed", exc_info=True)
+            logger.exception("Auto-discover failed")
         return None
 
     async def list_devices(self) -> list[dict[str, Any]]:
