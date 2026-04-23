@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import aiomqtt
 
@@ -24,6 +24,7 @@ class MqttClient:
     """Async MQTT client for shark2mqtt."""
 
     def __init__(self, config: Settings) -> None:
+        """Initialize the MQTT client with configuration."""
         self._config = config
         self._prefix = config.mqtt_prefix
         self._client: aiomqtt.Client | None = None
@@ -31,7 +32,8 @@ class MqttClient:
         self._fan_speed_overrides: dict[str, str] = {}  # device_id -> user-set speed
         self._published_rooms: dict[str, set[str]] = {}  # device_id -> room slugs
 
-    async def __aenter__(self) -> MqttClient:
+    async def __aenter__(self) -> Self:
+        """Enter the async context manager and connect to MQTT."""
         will = aiomqtt.Will(
             topic=f"{self._prefix}/status",
             payload=json.dumps({"state": "offline"}),
@@ -52,6 +54,7 @@ class MqttClient:
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """Exit the async context manager and connect to MQTT."""
         if self._client:
             await self._publish(f"{self._prefix}/status", {"state": "offline"}, retain=True)
             await self._client.__aexit__(*args)
@@ -84,8 +87,14 @@ class MqttClient:
                 "set_fan_speed_topic": f"{self._prefix}/{dsn}/set_fan_speed",
                 "fan_speed_list": ["eco", "normal", "max"],
                 "supported_features": [
-                    "start", "stop", "pause", "return_home",
-                    "locate", "fan_speed", "status", "send_command",
+                    "start",
+                    "stop",
+                    "pause",
+                    "return_home",
+                    "locate",
+                    "fan_speed",
+                    "status",
+                    "send_command",
                 ],
                 "availability_topic": f"{self._prefix}/{dsn}/available",
                 "payload_available": "online",
@@ -254,7 +263,9 @@ class MqttClient:
             # Publish current clean mode state
             mode = self._clean_modes.get(dsn, "Normal")
             await self._publish(
-                f"{self._prefix}/{dsn}/clean_mode/state", mode, retain=True,
+                f"{self._prefix}/{dsn}/clean_mode/state",
+                mode,
+                retain=True,
             )
 
         # Remove stale room buttons that no longer exist
@@ -263,7 +274,8 @@ class MqttClient:
         for room_slug in stale_rooms:
             await self._publish(
                 f"{HA_DISCOVERY_PREFIX}/button/{uid}_clean_{room_slug}/config",
-                "", retain=True,
+                "",
+                retain=True,
             )
             logger.info("Removed stale room button %s for %s", room_slug, dsn)
         self._published_rooms[dsn] = current_room_slugs
@@ -273,7 +285,9 @@ class MqttClient:
     # --- State publishing ---
 
     async def publish_state(
-        self, device: SharkVacuum, prev_error: dict[str, int] | None = None,
+        self,
+        device: SharkVacuum,
+        prev_error: dict[str, int] | None = None,
     ) -> None:
         """Publish device state, attributes, and availability.
 
@@ -306,7 +320,9 @@ class MqttClient:
                 )
                 logger.warning(
                     "Error on %s: %s (code %d)",
-                    device.product_name, device.error_text, device.error_code,
+                    device.product_name,
+                    device.error_text,
+                    device.error_code,
                 )
 
     async def publish_unavailable(self, devices: list[SharkVacuum]) -> None:
@@ -353,43 +369,66 @@ class MqttClient:
                 continue
 
             try:
-                if topic.endswith("/command"):
-                    command = payload.strip().lower()
-                    logger.info("Command received: %s for %s", command, device_id)
-                    await command_handler.send_command(device_id, command)
-                elif topic.endswith("/set_fan_speed"):
-                    speed = payload.strip().lower()
-                    logger.info("Fan speed received: %s for %s", speed, device_id)
-                    self._fan_speed_overrides[device_id] = speed
-                    await command_handler.set_fan_speed(device_id, speed)
-                elif topic.endswith("/send_command"):
-                    logger.info("send_command received for %s", device_id)
-                    await self._handle_send_command(
-                        command_handler, device_id, payload, devices,
-                    )
-                elif topic.endswith("/clean_room"):
-                    logger.info("clean_room button pressed for %s", device_id)
-                    await self._handle_clean_room(
-                        command_handler, device_id, payload, devices,
-                    )
-                elif topic.endswith("/clean_mode"):
-                    mode = payload.strip()
-                    if mode in ("Normal", "Matrix"):
-                        self._clean_modes[device_id] = mode
-                        await self._publish(
-                            f"{self._prefix}/{device_id}/clean_mode/state",
-                            mode, retain=True,
-                        )
-                        logger.info("Clean mode set to %s for %s", mode, device_id)
-                    else:
-                        logger.warning("Unknown clean mode: %s", mode)
-                if command_event is not None:
-                    command_event.set()
+                await self._handle_command_message(command_handler, devices, command_event, topic, payload, device_id)
             except Exception:
                 logger.exception("Failed to handle command on %s", topic)
 
-    async def _handle_clean_room(
-        self, handler: Any, device_id: str, payload: str,
+    async def _handle_command_message(
+        self,
+        command_handler: Any,
+        devices: dict[str, SharkVacuum],
+        command_event: asyncio.Event | None,
+        topic: str,
+        payload: str,
+        device_id: str,
+    ) -> None:
+        """Handle a single command message."""
+        if topic.endswith("/command"):
+            await self._handle_basic_command(command_handler, device_id, payload)
+        elif topic.endswith("/set_fan_speed"):
+            await self._handle_fan_speed_command(command_handler, device_id, payload)
+        elif topic.endswith("/send_command"):
+            await self._handle_send_command(command_handler, device_id, payload, devices)
+        elif topic.endswith("/clean_room"):
+            await self._handle_clean_room_command(command_handler, device_id, payload, devices)
+        elif topic.endswith("/clean_mode"):
+            await self._handle_clean_mode_command(device_id, payload)
+
+        if command_event is not None:
+            command_event.set()
+
+    async def _handle_basic_command(self, handler: Any, device_id: str, payload: str) -> None:
+        """Handle basic commands like start, stop, etc."""
+        command = payload.strip().lower()
+        logger.info("Command received: %s for %s", command, device_id)
+        await handler.send_command(device_id, command)
+
+    async def _handle_fan_speed_command(self, handler: Any, device_id: str, payload: str) -> None:
+        """Handle fan speed commands."""
+        speed = payload.strip().lower()
+        logger.info("Fan speed received: %s for %s", speed, device_id)
+        self._fan_speed_overrides[device_id] = speed
+        await handler.set_fan_speed(device_id, speed)
+
+    async def _handle_clean_mode_command(self, device_id: str, payload: str) -> None:
+        """Handle clean mode commands."""
+        mode = payload.strip()
+        if mode in ("Normal", "Matrix"):
+            self._clean_modes[device_id] = mode
+            await self._publish(
+                f"{self._prefix}/{device_id}/clean_mode/state",
+                mode,
+                retain=True,
+            )
+            logger.info("Clean mode set to %s for %s", mode, device_id)
+        else:
+            logger.warning("Unknown clean mode: %s", mode)
+
+    async def _handle_clean_room_command(
+        self,
+        handler: Any,
+        device_id: str,
+        payload: str,
         devices: dict[str, Any],
     ) -> None:
         """Handle room button press — dispatches clean_rooms with current mode."""
@@ -420,8 +459,12 @@ class MqttClient:
             else [room]
         )
         await handler.clean_rooms(
-            device_id, rooms=api_rooms, floor_id=floor_id,
-            clean_type="dry", clean_count=clean_count, mode=api_mode,
+            device_id,
+            rooms=[room],
+            floor_id=floor_id,
+            clean_type="dry",
+            clean_count=clean_count,
+            mode=api_mode,
             use_v3=use_v3,
         )
         logger.info(
@@ -429,9 +472,11 @@ class MqttClient:
             room, api_rooms, device_id, mode,
         )
 
-    @staticmethod
     async def _handle_send_command(
-        handler: Any, device_id: str, payload: str,
+        self,
+        handler: Any,
+        device_id: str,
+        payload: str,
         devices: dict[str, Any],
     ) -> None:
         """Handle vacuum.send_command from HA.
@@ -444,16 +489,16 @@ class MqttClient:
           clean_rooms:   {rooms: ["Kitchen", "Den"], mode: "UserRoom",
                           clean_count: 1, clean_type: "dry"}
         """
-        import json as _json
-        data = _json.loads(payload)
+
+        data = json.loads(payload)
         logger.debug("send_command raw data: %r", data)
         command = data.get("command", "")
         params = data.get("params", data.get("param", {}))
         # HA may send params as a JSON string — unwrap it
         if isinstance(params, str):
             try:
-                params = _json.loads(params)
-            except (ValueError, TypeError):
+                params = json.loads(params)
+            except ValueError, TypeError:
                 logger.warning("send_command params not valid JSON: %r", params)
                 params = {}
         if not isinstance(params, dict):
@@ -474,60 +519,97 @@ class MqttClient:
                 fid = device.floor_id
             return fid
 
-        def to_api_rooms(display_rooms: list[str]) -> list[str]:
-            if device and hasattr(device, "to_robot_room_names"):
-                return device.to_robot_room_names(display_rooms)
-            return list(display_rooms)
-
+        # Dispatch to specific command handlers
         if command == "clean_room":
-            room = params.get("room", "")
-            if not room:
-                logger.warning("clean_room requires 'room' in params")
-                return
-            floor_id = get_floor_id()
-            if not floor_id:
-                logger.warning("clean_room: no floor_id available")
-                return
-            await handler.clean_rooms(
-                device_id, rooms=to_api_rooms([room]), floor_id=floor_id,
-                clean_type=params.get("clean_type", "dry"),
-                clean_count=1, mode="UserRoom", use_v3=use_v3,
-            )
-
+            await self._handle_clean_room_send_command(handler, device_id, params, get_floor_id, use_v3)
         elif command == "matrix_clean":
-            room = params.get("room", "")
-            if not room:
-                logger.warning("matrix_clean requires 'room' in params")
-                return
-            floor_id = get_floor_id()
-            if not floor_id:
-                logger.warning("matrix_clean: no floor_id available")
-                return
-            await handler.clean_rooms(
-                device_id, rooms=to_api_rooms([room]), floor_id=floor_id,
-                clean_type=params.get("clean_type", "dry"),
-                clean_count=2, mode="UltraClean", use_v3=use_v3,
-            )
-
+            await self._handle_matrix_clean_send_command(handler, device_id, params, get_floor_id, use_v3)
         elif command == "clean_rooms":
-            rooms = params.get("rooms", [])
-            if not rooms:
-                logger.warning("clean_rooms requires 'rooms' in params")
-                return
-            floor_id = get_floor_id()
-            if not floor_id:
-                logger.warning("clean_rooms: no floor_id available")
-                return
-            await handler.clean_rooms(
-                device_id, rooms=to_api_rooms(rooms), floor_id=floor_id,
-                clean_type=params.get("clean_type", "dry"),
-                clean_count=params.get("clean_count", 1),
-                mode=params.get("mode", "UserRoom"), use_v3=use_v3,
-            )
-
+            await self._handle_clean_rooms_send_command(handler, device_id, params, get_floor_id, use_v3)
         else:
             logger.info("Forwarding send_command '%s' as generic command", command)
             await handler.send_command(device_id, command)
+
+    async def _handle_clean_room_send_command(
+        self,
+        handler: Any,
+        device_id: str,
+        params: dict[str, Any],
+        get_floor_id: callable,
+        use_v3: bool,
+    ) -> None:
+        """Handle clean_room command from send_command."""
+        room = params.get("room", "")
+        if not room:
+            logger.warning("clean_room requires 'room' in params")
+            return
+        floor_id = get_floor_id()
+        if not floor_id:
+            logger.warning("clean_room: no floor_id available")
+            return
+        await handler.clean_rooms(
+            device_id,
+            rooms=[room],
+            floor_id=floor_id,
+            clean_type=params.get("clean_type", "dry"),
+            clean_count=1,
+            mode="UserRoom",
+            use_v3=use_v3,
+        )
+
+    async def _handle_matrix_clean_send_command(
+        self,
+        handler: Any,
+        device_id: str,
+        params: dict[str, Any],
+        get_floor_id: callable,
+        use_v3: bool,
+    ) -> None:
+        """Handle matrix_clean command from send_command."""
+        room = params.get("room", "")
+        if not room:
+            logger.warning("matrix_clean requires 'room' in params")
+            return
+        floor_id = get_floor_id()
+        if not floor_id:
+            logger.warning("matrix_clean: no floor_id available")
+            return
+        await handler.clean_rooms(
+            device_id,
+            rooms=[room],
+            floor_id=floor_id,
+            clean_type=params.get("clean_type", "dry"),
+            clean_count=2,
+            mode="UltraClean",
+            use_v3=use_v3,
+        )
+
+    async def _handle_clean_rooms_send_command(
+        self,
+        handler: Any,
+        device_id: str,
+        params: dict[str, Any],
+        get_floor_id: callable,
+        use_v3: bool,
+    ) -> None:
+        """Handle clean_rooms command from send_command."""
+        rooms = params.get("rooms", [])
+        if not rooms:
+            logger.warning("clean_rooms requires 'rooms' in params")
+            return
+        floor_id = get_floor_id()
+        if not floor_id:
+            logger.warning("clean_rooms: no floor_id available")
+            return
+        await handler.clean_rooms(
+            device_id,
+            rooms=rooms,
+            floor_id=floor_id,
+            clean_type=params.get("clean_type", "dry"),
+            clean_count=params.get("clean_count", 1),
+            mode=params.get("mode", "UserRoom"),
+            use_v3=use_v3,
+        )
 
     def _extract_dsn(self, topic: str) -> str | None:
         """Extract DSN from topic like 'shark2mqtt/{dsn}/command'."""
