@@ -70,7 +70,9 @@ class CommandRouter:
 
 
 async def _fetch_skegox_mard(
-    api: SkegoxApi, dsn: str, product_name: str,
+    api: SkegoxApi,
+    dsn: str,
+    product_name: str,
 ) -> MardData:
     """Fetch and parse the skegox MARD file for a device.
 
@@ -86,13 +88,17 @@ async def _fetch_skegox_mard(
         return MardData({}, [], None)
     if not body:
         logger.debug(
-            "Skegox MARD for %s (%s): not available", product_name, dsn,
+            "Skegox MARD for %s (%s): not available",
+            product_name,
+            dsn,
         )
         return MardData({}, [], None)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "Skegox MARD fetched for %s (%s): %d bytes",
-            product_name, dsn, len(body),
+            product_name,
+            dsn,
+            len(body),
         )
         debug_dump_mard_structure(body, product_name, source="Skegox MARD")
     return parse_mard(body, product_name, dsn, source="Skegox MARD")
@@ -123,84 +129,26 @@ async def poll_loop(
             await auth.ensure_authenticated()
 
             # --- Skegox devices (primary) ---
-            skegox_snds: set[str] = set()
-            raw_devices = await api.get_all_devices()
-            for raw in raw_devices:
-                device = SharkVacuum.from_skegox(raw)
-
-                # Room source priority (issue #4):
-                # 1. Skegox MARD — authoritative for migrated devices,
-                #    has current floor_id and current AZ_N -> name map.
-                # 2. Ayla MARD — authoritative for pure-Ayla accounts.
-                #    Stale on migrated accounts (frozen at migration).
-                # 3. Ayla Robot_Room_List fallback (shadow-parsed).
-                # 4. Skegox Robot_Room_List (already on device from
-                #    from_skegox, left as-is when nothing else applies).
-                skegox_mard = skegox_mard_cache.get(device.dsn)
-                if skegox_mard is None:
-                    skegox_mard = await _fetch_skegox_mard(
-                        api, device.dsn, device.product_name,
-                    )
-                    # Cache only on success so a transient failure can be
-                    # retried next poll.
-                    if skegox_mard.rooms:
-                        skegox_mard_cache[device.dsn] = skegox_mard
-                ayla = ayla_mard.get(device.dsn)
-
-                if skegox_mard.rooms:
-                    if first_poll:
-                        logger.info(
-                            "Using Skegox MARD rooms for %s (%s): %s "
-                            "(floor_id=%s)",
-                            device.product_name, device.dsn,
-                            skegox_mard.rooms, skegox_mard.floor_id,
-                        )
-                    device.rooms = skegox_mard.rooms
-                    device.room_name_map = skegox_mard.name_map
-                    if skegox_mard.floor_id:
-                        device.floor_id = skegox_mard.floor_id
-                elif ayla and ayla.rooms:
-                    if first_poll:
-                        logger.info(
-                            "Using Ayla MARD rooms for %s (%s): %s "
-                            "(floor_id=%s)",
-                            device.product_name, device.dsn,
-                            ayla.rooms, ayla.floor_id,
-                        )
-                    device.rooms = ayla.rooms
-                    device.room_name_map = ayla.name_map
-                    if ayla.floor_id:
-                        device.floor_id = ayla.floor_id
-                elif not device.rooms and device.dsn in ayla_room_data:
-                    device.floor_id, device.rooms = ayla_room_data[device.dsn]
-                    if first_poll:
-                        logger.info(
-                            "Using Ayla Robot_Room_List fallback for "
-                            "%s (%s): %s (floor_id=%s)",
-                            device.product_name, device.dsn,
-                            device.rooms, device.floor_id,
-                        )
-
-                skegox_snds.add(device.dsn)
-                devices_map[device.dsn] = device
-                await mqtt.publish_discovery(device)
-                await mqtt.publish_state(device, prev_error=prev_errors)
-                prev_errors[device.dsn] = device.error_code
-                if device.ha_state != "docked":
-                    any_active = True
+            await _poll_skegox_devices(
+                api,
+                mqtt,
+                devices_map,
+                prev_errors,
+                skegox_mard_cache,
+                ayla_room_data,
+                ayla_mard,
+                first_poll,
+            )
 
             # --- Ayla fallback (only when skegox has no devices) ---
-            # If a user reports missing devices, check whether skegox
-            # returned some devices but not all — that would indicate
-            # a mixed migration we don't currently handle.
             if first_poll:
                 skegox_names = [d.product_name for d in devices_map.values()]
                 logger.info(
                     "Skegox returned %d device(s): %s",
-                    len(skegox_snds),
+                    len(devices_map),
                     skegox_names or "(none)",
                 )
-            if not skegox_snds:
+            if not devices_map:
                 await _poll_ayla_devices(ayla_api, mqtt, devices_map, prev_errors, first_poll)
             elif first_poll:
                 logger.info("Using skegox API, skipping Ayla")
@@ -222,6 +170,90 @@ async def poll_loop(
             await asyncio.sleep(5)
         except TimeoutError:
             pass
+
+
+async def _poll_skegox_devices(
+    api: SkegoxApi,
+    mqtt: MqttClient,
+    devices_map: dict[str, SharkVacuum],
+    prev_errors: dict[str, int],
+    skegox_mard_cache: dict[str, MardData],
+    ayla_room_data: dict[str, tuple[str, list[str]]],
+    ayla_mard: dict[str, MardData],
+    first_poll: bool,
+) -> None:
+    """Poll Skegox devices."""
+    skegox_snds: set[str] = set()
+    raw_devices = await api.get_all_devices()
+    for raw in raw_devices:
+        device = SharkVacuum.from_skegox(raw)
+        _set_device_rooms(device, skegox_mard_cache, ayla_mard, ayla_room_data, first_poll)
+        skegox_snds.add(device.dsn)
+        devices_map[device.dsn] = device
+        await mqtt.publish_discovery(device)
+        await mqtt.publish_state(device, prev_error=prev_errors)
+        prev_errors[device.dsn] = device.error_code
+        if device.ha_state != "docked":
+            any_active = True
+
+
+async def _set_device_rooms(
+    device: SharkVacuum,
+    skegox_mard_cache: dict[str, MardData],
+    ayla_mard: dict[str, MardData],
+    ayla_room_data: dict[str, tuple[str, list[str]]],
+    first_poll: bool,
+) -> None:
+    """Set device rooms based on available sources."""
+    skegox_mard = skegox_mard_cache.get(device.dsn)
+    if skegox_mard is None:
+        skegox_mard = await _fetch_skegox_mard(
+            api,
+            device.dsn,
+            device.product_name,
+        )
+        # Cache only on success so a transient failure can be
+        # retried next poll.
+        if skegox_mard.rooms:
+            skegox_mard_cache[device.dsn] = skegox_mard
+    ayla = ayla_mard.get(device.dsn)
+
+    if skegox_mard.rooms:
+        if first_poll:
+            logger.info(
+                "Using Skegox MARD rooms for %s (%s): %s (floor_id=%s)",
+                device.product_name,
+                device.dsn,
+                skegox_mard.rooms,
+                skegox_mard.floor_id,
+            )
+        device.rooms = skegox_mard.rooms
+        device.room_name_map = skegox_mard.name_map
+        if skegox_mard.floor_id:
+            device.floor_id = skegox_mard.floor_id
+    elif ayla and ayla.rooms:
+        if first_poll:
+            logger.info(
+                "Using Ayla MARD rooms for %s (%s): %s (floor_id=%s)",
+                device.product_name,
+                device.dsn,
+                ayla.rooms,
+                ayla.floor_id,
+            )
+        device.rooms = ayla.rooms
+        device.room_name_map = ayla.name_map
+        if ayla.floor_id:
+            device.floor_id = ayla.floor_id
+    elif not device.rooms and device.dsn in ayla_room_data:
+        device.floor_id, device.rooms = ayla_room_data[device.dsn]
+        if first_poll:
+            logger.info(
+                "Using Ayla Robot_Room_List fallback for %s (%s): %s (floor_id=%s)",
+                device.product_name,
+                device.dsn,
+                device.rooms,
+                device.floor_id,
+            )
 
 
 async def _poll_ayla_devices(
@@ -293,7 +325,7 @@ async def run(config: Settings) -> None:
             logger.error("Authentication failed — no id_token obtained")
         return
 
-    api = SkegoxApi(config, auth)
+    api = SkegoxApi(auth)
     ayla_api = AylaApi(auth)
     if config.shark_household_id:
         api.set_household(config.shark_household_id)
@@ -326,7 +358,7 @@ async def run(config: Settings) -> None:
         try:
             ayla_vacuums = await ayla_api.get_devices()
             for v in ayla_vacuums:
-                bsn = v._properties.get("GET_Battery_Serial_Num", "")
+                bsn = v.properties.get("GET_Battery_Serial_Num", "")
                 snd = bsn.split("-")[-1] if "-" in bsn else ""
                 if snd and v.rooms:
                     ayla_room_data[snd] = (v.floor_id, v.rooms)
@@ -346,7 +378,9 @@ async def run(config: Settings) -> None:
             command_event = asyncio.Event()
 
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event))
+                tg.create_task(
+                    poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event)
+                )
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
                 tg.create_task(_shutdown_watcher())
 

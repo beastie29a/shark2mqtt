@@ -31,11 +31,11 @@ SKEGOX_CALLER = "ENDUSER_MOBILEAPP"
 class SkegoxApi:
     """Async client for the SharkNinja cloud API."""
 
-    def __init__(self, config: Settings, auth: SharkAuth) -> None:
+    def __init__(self, auth: SharkAuth) -> None:
         """Initialize the SkegoxApi with config and authentication."""
-        self._config = config
+        self._config: Settings = auth.config
         self._auth = auth
-        self._region = REGIONS[config.shark_region]
+        self._region = REGIONS[self._config.shark_region]
         self._session: aiohttp.ClientSession | None = None
         self._household_id: str | None = None
         self._user_id: str | None = None

@@ -274,6 +274,10 @@ class SharkVacuum:
         """Determine if the device is currently online based on connection status."""
         return self.connection_status == "Online"
 
+    def properties(self) -> dict:
+        """Return the properties dict."""
+        return self._properties if isinstance(dict, self._properties) else {}
+
     # --- MQTT payloads ---
 
     def to_state_payload(self) -> dict[str, Any]:
