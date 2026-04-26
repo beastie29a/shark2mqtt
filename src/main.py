@@ -34,6 +34,7 @@ class CommandRouter:
         self._devices = devices
 
     def _api_for(self, device_id: str) -> Any:
+        """Determine which API to use for a device based on its api_backend."""
         device = self._devices.get(device_id)
         if device and device.api_backend == "ayla":
             return self._ayla
@@ -69,157 +70,167 @@ class CommandRouter:
         )
 
 
-async def _fetch_skegox_mard(
-    api: SkegoxApi,
-    dsn: str,
-    product_name: str,
-) -> MardData:
-    """Fetch and parse the skegox MARD file for a device.
+class Shark2Mqtt:
+    """Main class that coordinates the Shark vacuum to MQTT bridge functionality."""
 
-    Skegox exposes its own MARD file at the property-files endpoint
-    (two-hop fetch: wrapper returns a presigned S3 URL). Same schema
-    as Ayla MARD but can have a different floor_id and different
-    AZ_N -> name mappings on skegox-migrated accounts. See issue #4.
-    """
-    try:
-        body = await api.fetch_property_file(dsn, "MARD")
-    except Exception:
-        logger.debug("Skegox MARD fetch failed for %s", product_name, exc_info=True)
-        return MardData({}, [], None)
-    if not body:
-        logger.debug(
-            "Skegox MARD for %s (%s): not available",
-            product_name,
-            dsn,
-        )
-        return MardData({}, [], None)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "Skegox MARD fetched for %s (%s): %d bytes",
-            product_name,
-            dsn,
-            len(body),
-        )
-        debug_dump_mard_structure(body, product_name, source="Skegox MARD")
-    return parse_mard(body, product_name, dsn, source="Skegox MARD")
+    def __init__(
+        self,
+        api: SkegoxApi,
+        ayla_api: AylaApi,
+        mqtt: MqttClient,
+        auth: SharkAuth,
+        config: Settings,
+        devices_map: dict[str, SharkVacuum],
+        ayla_room_data: dict[str, tuple[str, list[str]]],
+        ayla_mard: dict[str, MardData],
+    ):
+        """Initialize Shark2Mqtt with all required API clients and data structures."""
+        self.api = api
+        self.ayla_api = ayla_api
+        self.mqtt = mqtt
+        self.auth = auth
+        self.config = config
+        self.devices_map = devices_map
+        self.ayla_room_data = ayla_room_data
+        self.ayla_mard = ayla_mard
+        self.prev_errors: dict[str, int] = {}
+        self.first_poll = True
+        # Skegox MARD cache — fetched once per session per device.
+        self.skegox_mard_cache: dict[str, MardData] = {}
 
+    async def _fetch_skegox_mard(
+        self,
+        dsn: str,
+        product_name: str,
+    ) -> MardData:
+        """Fetch and parse the skegox MARD file for a device.
 
-async def poll_loop(
-    api: SkegoxApi,
-    ayla_api: AylaApi,
-    mqtt: MqttClient,
-    auth: SharkAuth,
-    config: Settings,
-    devices_map: dict[str, SharkVacuum],
-    ayla_room_data: dict[str, tuple[str, list[str]]],
-    ayla_mard: dict[str, MardData],
-    command_event: asyncio.Event,
-) -> None:
-    """Periodically poll device state and publish to MQTT."""
-    prev_errors: dict[str, int] = {}
-    first_poll = True
-    # Skegox MARD cache — fetched once per session per device. MARD
-    # only changes on room edits/map saves, not per poll, so re-fetching
-    # every cycle would waste API calls and S3 presigned URLs.
-    skegox_mard_cache: dict[str, MardData] = {}
-
-    while True:
-        any_active = False
+        Skegox exposes its own MARD file at the property-files endpoint
+        (two-hop fetch: wrapper returns a presigned S3 URL). Same schema
+        as Ayla MARD but can have a different floor_id and different
+        AZ_N -> name mappings on skegox-migrated accounts. See issue #4.
+        """
         try:
-            await auth.ensure_authenticated()
-
-            # --- Skegox devices (primary) ---
-            await _poll_skegox_devices(
-                api,
-                mqtt,
-                devices_map,
-                prev_errors,
-                skegox_mard_cache,
-                ayla_room_data,
-                ayla_mard,
-                first_poll,
+            body = await self.api.fetch_property_file(dsn, "MARD")
+        except Exception as e:
+            logger.debug("Skegox MARD fetch failed for %s: %s", product_name, e, exc_info=True)
+            return MardData({}, [], None)
+        if not body:
+            logger.debug(
+                "Skegox MARD for %s (%s): not available",
+                product_name,
+                dsn,
             )
+            return MardData({}, [], None)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Skegox MARD fetched for %s (%s): %d bytes",
+                product_name,
+                dsn,
+                len(body),
+            )
+            debug_dump_mard_structure(body, product_name, source="Skegox MARD")
+        return parse_mard(body, product_name, dsn, source="Skegox MARD")
 
-            # --- Ayla fallback (only when skegox has no devices) ---
-            if first_poll:
-                skegox_names = [d.product_name for d in devices_map.values()]
-                logger.info(
-                    "Skegox returned %d device(s): %s",
-                    len(devices_map),
-                    skegox_names or "(none)",
-                )
-            if not devices_map:
-                await _poll_ayla_devices(ayla_api, mqtt, devices_map, prev_errors, first_poll)
-            elif first_poll:
-                logger.info("Using skegox API, skipping Ayla")
-            first_poll = False
+    async def poll_loop(
+        self,
+        command_event: asyncio.Event,
+    ) -> None:
+        """Periodically poll device state and publish to MQTT.
 
-        except SharkAuthError as e:
-            logger.error("Auth error during poll: %s", e)
-            await mqtt.publish_status({"state": "auth_error", "message": str(e)})
-            await mqtt.publish_unavailable(list(devices_map.values()))
-        except Exception:
-            logger.exception("Poll cycle failed")
-            await mqtt.publish_unavailable(list(devices_map.values()))
+        This is the main polling loop that fetches device information from
+        both Skegox and Ayla APIs, updates MQTT state, and handles device commands.
+        """
+        while True:
+            any_active = False
+            try:
+                await self.auth.ensure_authenticated()
 
-        interval = config.poll_interval_active if any_active else config.poll_interval
-        try:
-            await asyncio.wait_for(command_event.wait(), timeout=interval)
-            command_event.clear()
-            logger.debug("Poll triggered early by command, waiting for device to update")
-            await asyncio.sleep(5)
-        except TimeoutError:
-            pass
+                # --- Skegox devices (primary) ---
+                any_active = await self._poll_skegox_devices(command_event, any_active)
 
+                # --- Ayla fallback (only when skegox has no devices) ---
+                if self.first_poll:
+                    skegox_names = [d.product_name for d in self.devices_map.values()]
+                    logger.info(
+                        "Skegox returned %d device(s): %s",
+                        len(self.devices_map),
+                        skegox_names or "(none)",
+                    )
+                if not self.devices_map:
+                    await self._poll_ayla_devices()
+                elif self.first_poll:
+                    logger.info("Using skegox API, skipping Ayla")
+                self.first_poll = False
 
-async def _poll_skegox_devices(
-    api: SkegoxApi,
-    mqtt: MqttClient,
-    devices_map: dict[str, SharkVacuum],
-    prev_errors: dict[str, int],
-    skegox_mard_cache: dict[str, MardData],
-    ayla_room_data: dict[str, tuple[str, list[str]]],
-    ayla_mard: dict[str, MardData],
-    first_poll: bool,
-) -> None:
-    """Poll Skegox devices."""
-    skegox_snds: set[str] = set()
-    raw_devices = await api.get_all_devices()
-    for raw in raw_devices:
-        device = SharkVacuum.from_skegox(raw)
-        _set_device_rooms(device, skegox_mard_cache, ayla_mard, ayla_room_data, first_poll)
-        skegox_snds.add(device.dsn)
-        devices_map[device.dsn] = device
-        await mqtt.publish_discovery(device)
-        await mqtt.publish_state(device, prev_error=prev_errors)
-        prev_errors[device.dsn] = device.error_code
-        if device.ha_state != "docked":
-            any_active = True
+            except SharkAuthError as e:
+                logger.error("Auth error during poll: %s", e)
+                await self.mqtt.publish_status({"state": "auth_error", "message": str(e)})
+                await self.mqtt.publish_unavailable(list(self.devices_map.values()))
+            except Exception:
+                logger.exception("Poll cycle failed")
+                await self.mqtt.publish_unavailable(list(self.devices_map.values()))
 
+            interval = self.config.poll_interval_active if any_active else self.config.poll_interval
+            try:
+                await asyncio.wait_for(command_event.wait(), timeout=interval)
+                command_event.clear()
+                logger.debug("Poll triggered early by command, waiting for device to update")
+                await asyncio.sleep(5)
+            except TimeoutError:
+                pass
 
-async def _set_device_rooms(
-    device: SharkVacuum,
-    skegox_mard_cache: dict[str, MardData],
-    ayla_mard: dict[str, MardData],
-    ayla_room_data: dict[str, tuple[str, list[str]]],
-    first_poll: bool,
-) -> None:
-    """Set device rooms based on available sources."""
-    skegox_mard = skegox_mard_cache.get(device.dsn)
-    if skegox_mard is None:
-        skegox_mard = await _fetch_skegox_mard(
-            api,
-            device.dsn,
-            device.product_name,
-        )
-        # Cache only on success so a transient failure can be
-        # retried next poll.
+    async def _poll_skegox_devices(
+        self,
+        command_event: asyncio.Event,
+    ) -> None:
+        """Poll Skegox devices for updated information and publish to MQTT."""
+        skegox_snds: set[str] = set()
+        raw_devices = await self.api.get_all_devices()
+        for raw in raw_devices:
+            device = SharkVacuum.from_skegox(raw)
+            await self._set_device_rooms(device)
+            skegox_snds.add(device.dsn)
+            self.devices_map[device.dsn] = device
+            await self.mqtt.publish_discovery(device)
+            await self.mqtt.publish_state(device, prev_error=self.prev_errors)
+            self.prev_errors[device.dsn] = device.error_code
+
+    async def _set_device_rooms(
+        self,
+        device: SharkVacuum,
+    ) -> None:
+        """Set device rooms based on available sources.
+
+        This method attempts to get room information from multiple sources in order:
+        1. Cached Skegox MARD data
+        2. Fetch fresh Skegox MARD data
+        3. Ayla MARD data
+        4. Ayla Robot_Room_List fallback data
+        """
+        # Try to get cached Skegox MARD data
+        skegox_mard = self.skegox_mard_cache.get(device.dsn)
+        if skegox_mard is None:
+            skegox_mard = await self._fetch_skegox_mard(
+                device.dsn,
+                device.product_name,
+            )
+            # Cache only on success so a transient failure can be
+            # retried next poll.
+            if skegox_mard.rooms:
+                self.skegox_mard_cache[device.dsn] = skegox_mard
+
+        # Set room data from available sources in priority order
         if skegox_mard.rooms:
-            skegox_mard_cache[device.dsn] = skegox_mard
-    ayla = ayla_mard.get(device.dsn)
+            self._set_device_rooms_from_skegox(device, skegox_mard)
+        elif self.ayla_mard.get(device.dsn) and self.ayla_mard[device.dsn].rooms:
+            self._set_device_rooms_from_ayla(device, self.ayla_mard[device.dsn])
+        elif not device.rooms and device.dsn in self.ayla_room_data:
+            self._set_device_rooms_from_fallback(device, device.dsn)
 
-    if skegox_mard.rooms:
-        if first_poll:
+    def _set_device_rooms_from_skegox(self, device: SharkVacuum, skegox_mard: MardData) -> None:
+        """Set device rooms from Skegox MARD data."""
+        if self.first_poll:
             logger.info(
                 "Using Skegox MARD rooms for %s (%s): %s (floor_id=%s)",
                 device.product_name,
@@ -231,57 +242,59 @@ async def _set_device_rooms(
         device.room_name_map = skegox_mard.name_map
         if skegox_mard.floor_id:
             device.floor_id = skegox_mard.floor_id
-    elif ayla and ayla.rooms:
-        if first_poll:
+
+    def _set_device_rooms_from_ayla(self, device: SharkVacuum, ayla_mard: MardData) -> None:
+        """Set device rooms from Ayla MARD data."""
+        if self.first_poll:
             logger.info(
                 "Using Ayla MARD rooms for %s (%s): %s (floor_id=%s)",
                 device.product_name,
                 device.dsn,
-                ayla.rooms,
-                ayla.floor_id,
+                ayla_mard.rooms,
+                ayla_mard.floor_id,
             )
-        device.rooms = ayla.rooms
-        device.room_name_map = ayla.name_map
-        if ayla.floor_id:
-            device.floor_id = ayla.floor_id
-    elif not device.rooms and device.dsn in ayla_room_data:
-        device.floor_id, device.rooms = ayla_room_data[device.dsn]
-        if first_poll:
+        device.rooms = ayla_mard.rooms
+        device.room_name_map = ayla_mard.name_map
+        if ayla_mard.floor_id:
+            device.floor_id = ayla_mard.floor_id
+
+    def _set_device_rooms_from_fallback(self, device: SharkVacuum, dsn: str) -> None:
+        """Set device rooms from Ayla fallback data."""
+        self.devices_map[dsn].floor_id, self.devices_map[dsn].rooms = self.ayla_room_data[dsn]
+        if self.first_poll:
             logger.info(
                 "Using Ayla Robot_Room_List fallback for %s (%s): %s (floor_id=%s)",
                 device.product_name,
-                device.dsn,
+                dsn,
                 device.rooms,
                 device.floor_id,
             )
 
+    async def _poll_ayla_devices(
+        self,
+    ) -> None:
+        """Poll Ayla devices if skegox returned no devices.
 
-async def _poll_ayla_devices(
-    ayla_api: AylaApi,
-    mqtt: MqttClient,
-    devices_map: dict[str, SharkVacuum],
-    prev_errors: dict[str, int],
-    first_poll: bool,
-) -> None:
-    """Poll Ayla devices if skegox returned no devices."""
-    try:
-        ayla_devices = await ayla_api.get_devices()
-        if first_poll:
-            ayla_names = [d.product_name for d in ayla_devices]
-            logger.info(
-                "Falling back to Ayla, found %d device(s): %s",
-                len(ayla_devices),
-                ayla_names or "(none)",
-            )
-        for device in ayla_devices:
-            devices_map[device.dsn] = device
-            await mqtt.publish_discovery(device)
-            await mqtt.publish_state(device, prev_error=prev_errors)
-            prev_errors[device.dsn] = device.error_code
-            if device.ha_state != "docked":
-                pass
-    except Exception:
-        logger.exception("Ayla device fetch failed")
+        This is a fallback mechanism when Skegox API returns no devices.
+        """
+        try:
+            ayla_devices = await self.ayla_api.get_devices()
+            if self.first_poll:
+                ayla_names = [d.product_name for d in ayla_devices]
+                logger.info(
+                    "Falling back to Ayla, found %d device(s): %s",
+                    len(ayla_devices),
+                    ayla_names or "(none)",
+                )
+            for device in ayla_devices:
+                self.devices_map[device.dsn] = device
+                await self.mqtt.publish_discovery(device)
+                await self.mqtt.publish_state(device, prev_error=self.prev_errors)
+                self.prev_errors[device.dsn] = device.error_code
+                if device.ha_state != "docked":
+                    pass
+        except Exception:
+            logger.exception("Ayla device fetch failed")
 
 
 async def run(config: Settings) -> None:
@@ -370,21 +383,34 @@ async def run(config: Settings) -> None:
                         v.floor_id or None,
                     )
         except Exception:
-            logger.warning("Failed to prefetch Ayla room data", exc_info=True)
+            logger.exception("Failed to prefetch Ayla room data")
 
         async with mqtt:
             await mqtt.publish_status({"state": "online"})
 
             command_event = asyncio.Event()
 
+            shark2mqtt = Shark2Mqtt(
+                api=api,
+                ayla_api=ayla_api,
+                mqtt=mqtt,
+                auth=auth,
+                config=config,
+                devices_map=devices_map,
+                ayla_room_data=ayla_room_data,
+                ayla_mard=ayla_mard,
+            )
+
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(
-                    poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event)
+                    shark2mqtt.poll_loop(
+                        api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event
+                    )
                 )
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
                 tg.create_task(_shutdown_watcher())
 
-    except SystemExit, KeyboardInterrupt:
+    except (SystemExit, KeyboardInterrupt):
         logger.info("Shutting down gracefully")
     finally:
         await api.close()
