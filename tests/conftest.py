@@ -8,9 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.config import Settings
-from src.shark_auth import SharkAuth
-
 
 @pytest.fixture
 def command_event():
@@ -23,6 +20,12 @@ def mock_config():
     config.poll_interval = 5  # short for tests
     config.poll_interval_active = 1
     config.mqtt_prefix = "shark2mqtt"
+    config.username = "shark_user"
+    config.password = "shark_password"
+    config.shark_region = "us"
+    config.mqtt_host = "local"
+    config.mqtt_username = "mqtt_user"
+    config.mqtt_password = "mqtt_password"
     return config
 
 
@@ -41,9 +44,10 @@ def mock_ayla_api():
 
 
 @pytest.fixture
-def mock_auth():
+def mock_auth(mock_config):
     auth = AsyncMock()
     auth.ensure_authenticated.return_value = None
+    auth.config = mock_config
     return auth
 
 
@@ -53,20 +57,6 @@ def mock_mqtt():
     mqtt.publish_discovery.return_value = None
     mqtt.publish_state.return_value = None
     return mqtt
-
-
-shark_config: Settings = Settings(
-        shark_username="shark_user",
-        shark_password="shark_password",
-        shark_region="us",
-        mqtt_host="local",
-        mqtt_username="mqtt_user",
-        mqtt_password="mqtt_password",
-    )
-
-shark_auth = SharkAuth(
-    config=shark_config
-)
 
 
 def make_skegox_device(

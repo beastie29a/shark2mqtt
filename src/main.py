@@ -79,7 +79,6 @@ class Shark2Mqtt:
         ayla_api: AylaApi,
         mqtt: MqttClient,
         auth: SharkAuth,
-        config: Settings,
         devices_map: dict[str, SharkVacuum],
         ayla_room_data: dict[str, tuple[str, list[str]]],
         ayla_mard: dict[str, MardData],
@@ -89,7 +88,7 @@ class Shark2Mqtt:
         self.ayla_api = ayla_api
         self.mqtt = mqtt
         self.auth = auth
-        self.config = config
+        self._config = auth.config
         self.devices_map = devices_map
         self.ayla_room_data = ayla_room_data
         self.ayla_mard = ayla_mard
@@ -147,7 +146,7 @@ class Shark2Mqtt:
                 await self.auth.ensure_authenticated()
 
                 # --- Skegox devices (primary) ---
-                any_active = await self._poll_skegox_devices(command_event, any_active)
+                any_active = await self._poll_skegox_devices(command_event)
 
                 # --- Ayla fallback (only when skegox has no devices) ---
                 if self.first_poll:
@@ -171,7 +170,7 @@ class Shark2Mqtt:
                 logger.exception("Poll cycle failed")
                 await self.mqtt.publish_unavailable(list(self.devices_map.values()))
 
-            interval = self.config.poll_interval_active if any_active else self.config.poll_interval
+            interval = self._config.poll_interval_active if any_active else self._config.poll_interval
             try:
                 await asyncio.wait_for(command_event.wait(), timeout=interval)
                 command_event.clear()

@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.main import Shark2Mqtt
+
 
 @pytest.mark.asyncio
 async def test_poll_loop_with_proper_mocks():
@@ -37,8 +39,7 @@ async def test_poll_loop_with_proper_mocks():
         mock_mqtt_instance.publish.return_value = None
 
         # Test that the function can be imported and called
-        from src.main import poll_loop
-        assert callable(poll_loop)
+        assert callable(Shark2Mqtt.poll_loop)
 
         # Test that it doesn't immediately fail with the specific errors
         # This verifies that the auth mock is properly awaitable
@@ -72,5 +73,4 @@ async def test_poll_loop_error_handling():
         mock_ayla.side_effect = Exception("Test error")
 
         # Should not crash with the specific errors mentioned
-        from src.main import poll_loop
-        assert callable(poll_loop)
+        assert callable(Shark2Mqtt.poll_loop)

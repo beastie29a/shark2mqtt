@@ -7,15 +7,19 @@ import time
 
 import pytest
 
-from src.main import poll_loop
+from src.main import Shark2Mqtt
 
 
 @pytest.mark.asyncio
 async def test_poll_wakes_early_on_command_event(
-    mock_api, mock_ayla_api, mock_mqtt, mock_auth, mock_config, command_event,
+    mock_api,
+    mock_ayla_api,
+    mock_mqtt,
+    mock_auth,
+    command_event,
 ):
     """Poll loop should wake immediately when command_event is set."""
-    mock_config.poll_interval = 10  # long enough we'd notice waiting
+    mock_api.config.poll_interval = 10  # long enough we'd notice waiting
 
     poll_count = 0
 
@@ -32,10 +36,8 @@ async def test_poll_wakes_early_on_command_event(
         command_event.set()
 
     start = time.monotonic()
-    task = asyncio.create_task(poll_loop(
-        mock_api, mock_ayla_api, mock_mqtt, mock_auth, mock_config,
-        {}, {}, {}, command_event,
-    ))
+    shark2mqtt = Shark2Mqtt(mock_api, mock_ayla_api, mock_mqtt, mock_auth, {}, {}, {})
+    task = asyncio.create_task(shark2mqtt.poll_loop(command_event))
     await set_event_soon()
     # Give the loop time to wake, wait the 5s post-command delay, and run the second poll
     await asyncio.sleep(5.5)
@@ -51,10 +53,14 @@ async def test_poll_wakes_early_on_command_event(
 
 @pytest.mark.asyncio
 async def test_poll_waits_full_interval_without_event(
-    mock_api, mock_ayla_api, mock_mqtt, mock_auth, mock_config, command_event,
+    mock_api,
+    mock_ayla_api,
+    mock_mqtt,
+    mock_auth,
+    command_event,
 ):
     """Without the event, poll loop waits the full interval."""
-    mock_config.poll_interval = 0.3
+    mock_api.config.poll_interval = 0.3
 
     poll_count = 0
 
@@ -68,11 +74,9 @@ async def test_poll_waits_full_interval_without_event(
     mock_api.get_all_devices.side_effect = counting_get_all
 
     start = time.monotonic()
+    shark2mqtt = Shark2Mqtt(mock_api, mock_ayla_api, mock_mqtt, mock_auth, {}, {}, {})
     with pytest.raises(asyncio.CancelledError):
-        await poll_loop(
-            mock_api, mock_ayla_api, mock_mqtt, mock_auth, mock_config,
-            {}, {}, {}, command_event,
-        )
+        await shark2mqtt.poll_loop(command_event)
     elapsed = time.monotonic() - start
 
     assert poll_count == 2
@@ -82,10 +86,14 @@ async def test_poll_waits_full_interval_without_event(
 
 @pytest.mark.asyncio
 async def test_event_cleared_after_wake(
-    mock_api, mock_ayla_api, mock_mqtt, mock_auth, mock_config, command_event,
+    mock_api,
+    mock_ayla_api,
+    mock_mqtt,
+    mock_auth,
+    command_event,
 ):
     """Event should be cleared after waking the poll loop."""
-    mock_config.poll_interval = 10
+    mock_api.config.poll_interval = 10
 
     poll_count = 0
     event_state_after_wake = None
@@ -104,11 +112,9 @@ async def test_event_cleared_after_wake(
     # Pre-set the event so the first sleep wakes immediately
     command_event.set()
 
+    shark2mqtt = Shark2Mqtt(mock_api, mock_ayla_api, mock_mqtt, mock_auth, {}, {}, {})
     with pytest.raises(asyncio.CancelledError):
-        await poll_loop(
-            mock_api, mock_ayla_api, mock_mqtt, mock_auth, mock_config,
-            {}, {}, {}, command_event,
-        )
+        await shark2mqtt.poll_loop(command_event)
 
     assert poll_count == 2
     assert event_state_after_wake is False
