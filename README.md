@@ -3,13 +3,22 @@
 Bridge SharkNinja robot vacuums to [Home Assistant](https://www.home-assistant.io/) via MQTT autodiscovery.
 
 > [!NOTE]
-> This project has been developed and tested with US-region Shark accounts and two specific models (both from Costco in the US):
-> - **UR2500SR Series Shark AI Ultra Robot Vacuum with Self-Empty Base** (UR250BEXUS)
-> - **UR2360S Series Shark Matrix Plus** (UR2360EEUS)
->
-> It may work with other SharkNinja robot vacuums, but no other models have been tested.
->
-> **EU region support:** Set `SHARK_REGION=eu` to use with EU Shark accounts. Thanks to [@hjennerway](https://github.com/hjennerway) for enabling us to capture the EU API traffic that made this possible.
+> **EU region support:** Set `SHARK_REGION=eu` to use with EU Shark accounts. Thanks to [@hjennerway](https://github.com/hjennerway) for capturing the EU API traffic that made this possible.
+
+## Confirmed Working Models
+
+Models below have been confirmed working by users in the wild. Other SharkNinja robot vacuums likely work too -- this list reflects what's been reported, not the limit of what's supported.
+
+| Model | Region | Reported by | Notes |
+|---|---|---|---|
+| UR250BEXUS (Shark AI Ultra, UR2500SR) | US | [@CamSoper](https://github.com/CamSoper) | Dev hardware |
+| UR2360EEUS (Shark Matrix Plus, UR2360S) | US | [@CamSoper](https://github.com/CamSoper) | Dev hardware |
+| RV2110DDUS | US | [@gogorichie](https://github.com/gogorichie) ([#9](https://github.com/CamSoper/shark2mqtt/issues/9)) | |
+| RV2820VEUS | US | [@400HPMustang](https://github.com/400HPMustang) ([#8](https://github.com/CamSoper/shark2mqtt/issues/8)) | Pause command not honored by vacuum |
+| RV2820YECA (PowerDetect 2-in-1) | Canada (`us` region) | [@hslabbert](https://github.com/hslabbert) ([#4](https://github.com/CamSoper/shark2mqtt/issues/4)) | |
+| AV251WAXUS | US | [@Slivacki](https://github.com/Slivacki) ([#1](https://github.com/CamSoper/shark2mqtt/issues/1)) | |
+| UR250BE0US | US | [@Pau1ey](https://github.com/Pau1ey) ([#8](https://github.com/CamSoper/shark2mqtt/issues/8)) | |
+| Shark PowerDetect (model unspecified) | EU | [@hjennerway](https://github.com/hjennerway) ([#3](https://github.com/CamSoper/shark2mqtt/issues/3)) | |
 
 ## Quick Start
 
@@ -25,6 +34,12 @@ Bridge SharkNinja robot vacuums to [Home Assistant](https://www.home-assistant.i
    ```bash
    docker compose up -d
    ```
+
+## Home Assistant OS Add-on
+
+Running HAOS? [@400HPMustang](https://github.com/400HPMustang) built an HA add-on that wraps shark2mqtt: **[400HPMustang/shark2mqtt-addon](https://github.com/400HPMustang/shark2mqtt-addon)**. Install it from the HA Add-on Store -- no Docker setup needed.
+
+The add-on is maintained separately. File add-on-specific issues on that repo; shark2mqtt issues stay here.
 
 ## Pre-built Image
 
@@ -184,6 +199,14 @@ data:
 ## Contributing
 
 This project scratches a personal itch — I'm sharing it in case it helps others, not looking to take on a maintenance burden. If something doesn't work for you, please submit a **pull request** rather than an issue. I only own two vacuum models, so I can't test or troubleshoot devices I don't have. PRs with fixes or support for additional models are welcome; issues requesting changes are likely to be closed.
+
+## Acknowledgements
+
+Big thanks to the folks who've made this project better than I could've made it alone:
+
+- [@hjennerway](https://github.com/hjennerway) -- captured the EU API traffic that made EU region support possible.
+- [@hslabbert](https://github.com/hslabbert) -- patiently dug through round after round of DEBUG shadow dumps to shake out the room-naming bugs on PowerDetect models ([#4](https://github.com/CamSoper/shark2mqtt/issues/4)). Led to the MARD-as-authoritative-room-source fix.
+- [@400HPMustang](https://github.com/400HPMustang) -- built the [Home Assistant OS add-on](https://github.com/400HPMustang/shark2mqtt-addon).
 
 ## Building from Source
 
