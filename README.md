@@ -194,3 +194,21 @@ docker build -t shark2mqtt .
 ```
 
 The image is ~1.2 GB due to the bundled Chromium browser required for authentication.
+
+## Development
+
+To set up the development environment, run:
+
+```bash
+# Install dependencies
+pip install -e .
+
+# Run tests
+pytest
+
+# Run tests with coverage
+pytest --cov=src --cov-report=term-missing
+
+# Run specific test modules
+pytest tests/test_main.py tests/test_ayla_api.py tests/test_config.py
+```

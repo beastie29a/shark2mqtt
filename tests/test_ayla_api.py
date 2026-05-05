@@ -105,9 +105,10 @@ async def test_refresh_auth_no_refresh_token(mock_auth):
     """Test refresh_auth method when no refresh token is available."""
     api = AylaApi(mock_auth)
     api._refresh_token = None
-
-    with pytest.raises(SharkAuthError, match="No Ayla refresh token available"):
-        await api.refresh_auth()
+    # Mock the _auth.ayla_refresh_token property to avoid the JSON serialization issue
+    with patch.object(mock_auth, 'ayla_refresh_token', None):
+        with pytest.raises(SharkAuthError, match="No Ayla refresh token available"):
+            await api.refresh_auth()
 
 
 @pytest.mark.asyncio
@@ -353,18 +354,16 @@ async def test_set_fan_speed(mock_auth):
     api._access_token = "test_token"
 
     # Mock the session and response
-    mock_session = AsyncMock()
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_session.request = AsyncMock(return_value=mock_response)
+    mock_response.json = AsyncMock(return_value={})
 
-    with (
-        patch.object(api, "_get_session", return_value=mock_session),
-        patch.object(api, "_ensure_ayla_auth", return_value=None),
-    ):
-        await api.set_fan_speed("test_dsn", "quiet")
-        # Check that request was called
-        assert mock_session.request.called
+    with patch("aiohttp.ClientSession.request") as mock_request:
+        mock_request.return_value.__aenter__.return_value = mock_response
+        with patch.object(api, "_ensure_ayla_auth", return_value=None):
+            await api.set_fan_speed("test_dsn", "normal")
+            # Check that request was called
+            assert mock_request.called
 
 
 @pytest.mark.asyncio
@@ -395,19 +394,18 @@ async def test_clean_rooms_v3(mock_auth):
     api._access_token = "test_token"
 
     # Mock the session and response
-    mock_session = AsyncMock()
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_session.request = AsyncMock(return_value=mock_response)
+    mock_response.json = AsyncMock(return_value={})
 
-    api._get_session.return_value = mock_session
-    api._ensure_ayla_auth.return_value = None
-
-    await api.clean_rooms(
-        "test_dsn", ["Living", "Kitchen"], "1", clean_type="dry", clean_count=1, mode="UserRoom", use_v3=True
-    )
-    # Check that request was called
-    assert mock_session.request.called
+    with patch("aiohttp.ClientSession.request") as mock_request:
+        mock_request.return_value.__aenter__.return_value = mock_response
+        with patch.object(api, "_ensure_ayla_auth", return_value=None):
+            await api.clean_rooms(
+                "test_dsn", ["Living", "Kitchen"], "1", clean_type="dry", clean_count=1, mode="UserRoom", use_v3=True
+            )
+            # Check that request was called
+            assert mock_request.called
 
 
 @pytest.mark.asyncio
@@ -417,17 +415,17 @@ async def test_clean_rooms_legacy(mock_auth):
     api._access_token = "test_token"
 
     # Mock the session and response
-    mock_session = AsyncMock()
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_session.request = AsyncMock(return_value=mock_response)
+    mock_response.json = AsyncMock(return_value={})
 
-    with (
-        patch.object(api, "_get_session", return_value=mock_session),
-        patch.object(api, "_ensure_ayla_auth", return_value=None),
-    ):
-        await api.clean_rooms(
-            "test_dsn", ["Living", "Kitchen"], "1", clean_type="dry", clean_count=1, mode="UserRoom", use_v3=False
-        )
-        # Check that request was called
-        assert mock_session.request.called
+    with patch("aiohttp.ClientSession.request") as mock_request:
+        mock_request.return_value.__aenter__.return_value = mock_response
+        with patch.object(api, "_ensure_ayla_auth", return_value=None):
+            await api.clean_rooms(
+                "test_dsn", ["Living", "Kitchen"], "1", clean_type="dry", clean_count=1, mode="UserRoom", use_v3=False
+            )
+            # Check that request was called
+            assert mock_request.called
+
+
