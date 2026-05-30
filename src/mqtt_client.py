@@ -218,6 +218,22 @@ class MqttClient:
             retain=True,
         )
 
+        # # Image entity for map
+        # await self._publish(
+        #     f"{HA_DISCOVERY_PREFIX}/image/{uid}_map/config",
+        #     {
+        #         "name": "Map",
+        #         "unique_id": f"{uid}_map",
+        #         "object_id": f"{slug}_map",
+        #         "state_topic": f"{self._prefix}/{dsn}/map_state",
+        #         "availability_topic": f"{self._prefix}/{dsn}/available",
+        #         "payload_available": "online",
+        #         "payload_not_available": "offline",
+        #         "device": device.device_info,
+        #     },
+        #     retain=True,
+        # )
+
         # Per-room clean buttons (only when room data is available)
         current_room_slugs: set[str] = set()
         if device.rooms:

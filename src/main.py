@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import signal
+from pathlib import Path
 from typing import Any
+
+import filetype
 
 from .ayla_api import AylaApi, MardData, debug_dump_mard_structure, parse_mard
 from .config import Settings
@@ -96,6 +100,7 @@ class Shark2Mqtt:
         self.first_poll = True
         # Skegox MARD cache — fetched once per session per device.
         self.skegox_mard_cache: dict[str, MardData] = {}
+        self.shegox_floor_map_bin = None
 
     async def _fetch_skegox_mard(
         self,
@@ -130,6 +135,51 @@ class Shark2Mqtt:
             )
             debug_dump_mard_structure(body, product_name, source="Skegox MARD")
         return parse_mard(body, product_name, dsn, source="Skegox MARD")
+
+    async def _fetch_skegox_visual_floor(
+        self,
+        dsn: str,
+        product_name: str,
+    ) -> bytes:
+        """Fetch and retrieve the Visual_Floor_1 bin file for a device.
+
+        This method fetches the Visual_Floor_1 property from Skegox API
+        and returns it as bytes.
+        """
+        source = "Skegox Visual_Floor_1"
+        try:
+            body = await self.api.fetch_property_file(dsn, "Visual_Floor_1")
+        except Exception as e:
+            logger.debug("Skegox Visual_Floor_1 fetch failed for %s: %s", product_name, e, exc_info=True)
+            return b""
+
+        if not body:
+            logger.debug(
+                "Skegox Visual_Floor_1 for %s (%s): not available",
+                product_name,
+                dsn,
+            )
+            return b""
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Skegox Visual_Floor_1 fetched for %s (%s): %d bytes",
+                product_name,
+                dsn,
+                len(body),
+            )
+
+        try:
+            parsed = body.decode("utf-8", errors='replace')
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            logger.debug("%s for %s: not valid JSON", source, product_name)
+            return {}
+
+        logger.debug("Decoded Body Type: %s", type(parsed))
+        # Optionally, you can add code here to identify the file type
+        # For example, checking magic numbers or headers
+
+        return body
 
     async def poll_loop(
         self,
@@ -218,6 +268,15 @@ class Shark2Mqtt:
             # retried next poll.
             if skegox_mard.rooms:
                 self.skegox_mard_cache[device.dsn] = skegox_mard
+
+        if self.shegox_floor_map_bin is None:
+            visual_floor_data = await self._fetch_skegox_visual_floor(device.dsn, device.product_name)
+            if visual_floor_data:
+                image_type = filetype.guess_mime(visual_floor_data) or type(visual_floor_data)
+                with Path.open("Visual_Floor_1.bin", "wb") as fp:
+                    fp.write(visual_floor_data)
+                logger.info(f"Visual_Floor_1 for {device.product_name} ({device.dsn}): type is {image_type}")
+            self.shegox_floor_map_bin = visual_floor_data or {}
 
         # Set room data from available sources in priority order
         if skegox_mard.rooms:
@@ -394,22 +453,17 @@ async def run(config: Settings) -> None:
                 ayla_api=ayla_api,
                 mqtt=mqtt,
                 auth=auth,
-                config=config,
                 devices_map=devices_map,
                 ayla_room_data=ayla_room_data,
                 ayla_mard=ayla_mard,
             )
 
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(
-                    shark2mqtt.poll_loop(
-                        api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event
-                    )
-                )
+                tg.create_task(shark2mqtt.poll_loop(command_event))
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
                 tg.create_task(_shutdown_watcher())
 
-    except (SystemExit, KeyboardInterrupt):
+    except SystemExit, KeyboardInterrupt:
         logger.info("Shutting down gracefully")
     finally:
         await api.close()

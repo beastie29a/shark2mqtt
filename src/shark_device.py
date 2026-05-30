@@ -186,6 +186,7 @@ class SharkVacuum:
     def operating_mode(self) -> OperatingMode | None:
         """Get the current operating mode as an OperatingMode enum, or None if unknown."""
         val = self._get_int_prop(PROP_GET_OPERATING_MODE, -1)
+        logger.debug("%s Operating mode: %s", self.product_name, val)
         try:
             return OperatingMode(val)
         except ValueError:
