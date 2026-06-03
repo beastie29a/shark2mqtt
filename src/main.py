@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import signal
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,13 @@ from .shark_auth import SharkAuth
 from .shark_device import SharkVacuum
 from .skegox_api import SkegoxApi
 
+# Import floor map parsing function
+from visualize_floor_map import parse_floor_map_bytes
+
 logger = logging.getLogger("shark2mqtt")
+
+# Floor map image cache interval - minimum seconds between map updates during active cleaning
+IMAGE_CACHE_INTERVAL = 30
 
 
 class CommandRouter:
@@ -101,6 +108,8 @@ class Shark2Mqtt:
         # Skegox MARD cache — fetched once per session per device.
         self.skegox_mard_cache: dict[str, MardData] = {}
         self.shegox_floor_map_bin = None
+        # Per-device floor map last update timestamp for caching
+        self._floor_map_last_update: dict[str, float] = {}
 
     async def _fetch_skegox_mard(
         self,
@@ -269,13 +278,32 @@ class Shark2Mqtt:
             if skegox_mard.rooms:
                 self.skegox_mard_cache[device.dsn] = skegox_mard
 
-        if self.shegox_floor_map_bin is None:
+        # Check if we should update the floor map
+        # Always update on first fetch, otherwise only if cleaning and cache interval has passed
+        last_update = self._floor_map_last_update.get(device.dsn, 0.0)
+        is_cleaning = device.ha_state == "cleaning"
+        should_update_map = (
+            self.shegox_floor_map_bin is None or  # First time, always fetch
+            (is_cleaning and (time.time() - last_update) >= IMAGE_CACHE_INTERVAL)
+        )
+
+        if should_update_map:
             visual_floor_data = await self._fetch_skegox_visual_floor(device.dsn, device.product_name)
             if visual_floor_data:
                 image_type = filetype.guess_mime(visual_floor_data) or type(visual_floor_data)
                 with Path.open("Visual_Floor_1.bin", "wb") as fp:
                     fp.write(visual_floor_data)
                 logger.info(f"Visual_Floor_1 for {device.product_name} ({device.dsn}): type is {image_type}")
+
+                # Parse and publish the floor map image
+                try:
+                    parsed_map = parse_floor_map_bytes(visual_floor_data)
+                    await self.mqtt.publish_map_image(device, parsed_map)
+                    logger.info(f"Published floor map image for {device.product_name}")
+                    # Update the cache timestamp on successful publish
+                    self._floor_map_last_update[device.dsn] = time.time()
+                except Exception as e:
+                    logger.error(f"Failed to parse/publish floor map: {e}")
             self.shegox_floor_map_bin = visual_floor_data or {}
 
         # Set room data from available sources in priority order
