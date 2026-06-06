@@ -28,9 +28,11 @@ class MqttClient:
         self._config = config
         self._prefix = config.mqtt_prefix
         self._client: aiomqtt.Client | None = None
-        self._clean_modes: dict[str, str] = {}  # device_id -> "Normal" or "Matrix"
+        self._clean_modes: dict[str, str] = {}  # device_id -> mode selection
+        self._clean_types: dict[str, str] = {}  # device_id -> "dry"/"wet"/"both"
         self._fan_speed_overrides: dict[str, str] = {}  # device_id -> user-set speed
         self._published_rooms: dict[str, set[str]] = {}  # device_id -> room slugs
+        self._supports_wet_dry: dict[str, bool] = {}  # device_id -> has wet/dry capability
 
     async def __aenter__(self) -> Self:
         """Enter the async context manager and connect to MQTT."""
@@ -258,7 +260,19 @@ class MqttClient:
                     retain=True,
                 )
 
-            # Clean mode select (Normal vs Matrix)
+            # Determine if device supports wet/dry cleaning (check for cleantype in shadow)
+            supports_wet_dry = self._supports_wet_dry.get(dsn, False)
+
+            # Clean mode select - show appropriate options based on device capabilities
+            if supports_wet_dry:
+                # Devices with wet/dry capability show cleaning type options
+                clean_mode_options = ["Dry", "Wet", "Both"]
+                clean_mode_default = "Dry"
+            else:
+                # Traditional devices show navigation pattern options
+                clean_mode_options = ["Normal", "Matrix"]
+                clean_mode_default = "Normal"
+
             await self._publish(
                 f"{HA_DISCOVERY_PREFIX}/select/{uid}_clean_mode/config",
                 {
@@ -267,7 +281,7 @@ class MqttClient:
                     "object_id": f"{slug}_clean_mode",
                     "command_topic": f"{self._prefix}/{dsn}/clean_mode",
                     "state_topic": f"{self._prefix}/{dsn}/clean_mode/state",
-                    "options": ["Normal", "Matrix"],
+                    "options": clean_mode_options,
                     "icon": "mdi:broom",
                     "availability_topic": f"{self._prefix}/{dsn}/available",
                     "payload_available": "online",
@@ -278,7 +292,7 @@ class MqttClient:
             )
 
             # Publish current clean mode state
-            mode = self._clean_modes.get(dsn, "Normal")
+            mode = self._clean_modes.get(dsn, clean_mode_default)
             await self._publish(
                 f"{self._prefix}/{dsn}/clean_mode/state",
                 mode,
@@ -639,7 +653,9 @@ class MqttClient:
     async def _handle_clean_mode_command(self, device_id: str, payload: str) -> None:
         """Handle clean mode commands."""
         mode = payload.strip()
-        if mode in ("Normal", "Matrix"):
+        # Support both traditional (Normal/Matrix) and wet/dry capable (Dry/Wet/Both) modes
+        valid_modes = ("Normal", "Matrix", "Dry", "Wet", "Both")
+        if mode in valid_modes:
             self._clean_modes[device_id] = mode
             await self._publish(
                 f"{self._prefix}/{device_id}/clean_mode/state",

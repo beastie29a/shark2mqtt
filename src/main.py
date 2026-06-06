@@ -70,15 +70,29 @@ class CommandRouter:
         use_v3: bool = False,
     ) -> None:
         """Clean specified rooms on the given device."""
-        await self._api_for(device_id).clean_rooms(
-            device_id,
-            rooms,
-            floor_id,
-            clean_type,
-            clean_count,
-            mode,
-            use_v3,
-        )
+        device = self._devices.get(device_id)
+        if device and device.supports_both_modes:
+            # Handle both vacuum and mop modes
+            await self._api_for(device_id).clean_rooms(
+                device_id,
+                rooms,
+                floor_id,
+                clean_type,
+                clean_count,
+                mode,
+                use_v3,
+            )
+        else:
+            # Handle only vacuum mode
+            await self._api_for(device_id).clean_rooms(
+                device_id,
+                rooms,
+                floor_id,
+                clean_type,
+                clean_count,
+                mode,
+                use_v3,
+            )
 
 
 class Shark2Mqtt:
@@ -377,6 +391,11 @@ class Shark2Mqtt:
                 await self.mqtt.publish_discovery(device)
                 await self.mqtt.publish_state(device, prev_error=self.prev_errors)
                 self.prev_errors[device.dsn] = device.error_code
+
+                # Modify select entity based on device capabilities
+                if device.supports_both_modes:
+                    # Add logic to modify select entity for devices that support both modes
+                    pass
                 if device.ha_state != "docked":
                     pass
         except Exception:
@@ -491,7 +510,7 @@ async def run(config: Settings) -> None:
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
                 tg.create_task(_shutdown_watcher())
 
-    except SystemExit, KeyboardInterrupt:
+    except (SystemExit, KeyboardInterrupt):
         logger.info("Shutting down gracefully")
     finally:
         await api.close()

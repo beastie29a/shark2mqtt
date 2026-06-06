@@ -119,7 +119,7 @@ class SharkVacuum:
                 try:
                     atc_data = json.loads(atc_val)
                     vac.floor_id = atc_data.get("floor_id", "")
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     pass
 
         vac.api_backend = "skegox"
@@ -173,11 +173,16 @@ class SharkVacuum:
     def _get_prop(self, name: str, default: Any = None) -> Any:
         return self._properties.get(name, default)
 
+    @property
+    def supports_both_modes(self) -> bool:
+        """Check if the device supports both vacuum and mop modes."""
+        return self._get_prop("MopPlateAttached", False)
+
     def _get_int_prop(self, name: str, default: int = 0) -> int:
         val = self._properties.get(name, default)
         try:
             return int(val)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return default
 
     # --- State properties ---
@@ -241,6 +246,11 @@ class SharkVacuum:
             return PowerMode(val)
         except ValueError:
             return None
+
+    @property
+    def supports_both_modes(self) -> bool:
+        """Check if the device supports both vacuum and mop modes."""
+        return self._get_prop("MopPlateAttached", False)
 
     @property
     def fan_speed(self) -> str:
