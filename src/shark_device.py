@@ -42,6 +42,7 @@ class SharkVacuum:
         self.floor_id: str = ""
         self.rooms: list[str] = []
         self.has_areas_v3: bool = False
+        self.supports_both_modes: bool = False
         self.api_backend: str = "ayla"
         self.room_name_map: dict[str, str] = {}
 
@@ -102,6 +103,7 @@ class SharkVacuum:
 
         # Detect clean command capability from shadow properties
         vac.has_areas_v3 = "AreasToClean_V3" in reported
+        vac.supports_both_modes = "MopPlateAttached" in reported
 
         # Parse room list from Robot_Room_List (format: "FloorID:Room1:Room2:...")
         room_list_raw = reported.get("Robot_Room_List", {})
@@ -173,11 +175,6 @@ class SharkVacuum:
     def _get_prop(self, name: str, default: Any = None) -> Any:
         return self._properties.get(name, default)
 
-    @property
-    def supports_both_modes(self) -> bool:
-        """Check if the device supports both vacuum and mop modes."""
-        return self._get_prop("MopPlateAttached", False)
-
     def _get_int_prop(self, name: str, default: int = 0) -> int:
         val = self._properties.get(name, default)
         try:
@@ -246,11 +243,6 @@ class SharkVacuum:
             return PowerMode(val)
         except ValueError:
             return None
-
-    @property
-    def supports_both_modes(self) -> bool:
-        """Check if the device supports both vacuum and mop modes."""
-        return self._get_prop("MopPlateAttached", False)
 
     @property
     def fan_speed(self) -> str:

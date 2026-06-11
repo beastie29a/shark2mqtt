@@ -333,7 +333,7 @@ class SkegoxApi:
             snd: Device SND identifier.
             rooms: List of room names (e.g., ["Kitchen", "Den"]).
             floor_id: Floor identifier (e.g., "2A38EFA6").
-            clean_type: "dry" for vacuum, "wet" for mop.
+            clean_type: "dry" for vacuum, "wet" for mop, "deep" for both.
             clean_count: Number of passes (1 = normal, 2 = matrix/ultra).
             mode: "UserRoom" for normal, "UltraClean" for matrix clean.
             use_v3: True for devices with AreasToClean_V3 (dict format),

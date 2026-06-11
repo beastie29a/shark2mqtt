@@ -29,7 +29,7 @@ class MqttClient:
         self._prefix = config.mqtt_prefix
         self._client: aiomqtt.Client | None = None
         self._clean_modes: dict[str, str] = {}  # device_id -> mode selection
-        self._clean_types: dict[str, str] = {}  # device_id -> "dry"/"wet"/"both"
+        self._clean_types: dict[str, str] = {}  # device_id -> "dry"/"wet"/"deep"
         self._fan_speed_overrides: dict[str, str] = {}  # device_id -> user-set speed
         self._published_rooms: dict[str, set[str]] = {}  # device_id -> room slugs
         self._supports_wet_dry: dict[str, bool] = {}  # device_id -> has wet/dry capability
@@ -266,7 +266,7 @@ class MqttClient:
             # Clean mode select - show appropriate options based on device capabilities
             if supports_wet_dry:
                 # Devices with wet/dry capability show cleaning type options
-                clean_mode_options = ["Dry", "Wet", "Both"]
+                clean_mode_options = ["Dry", "Wet", "Deep"]
                 clean_mode_default = "Dry"
             else:
                 # Traditional devices show navigation pattern options
