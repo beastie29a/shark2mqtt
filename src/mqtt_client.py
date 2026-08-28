@@ -27,7 +27,7 @@ class MqttClient:
         self._config = config
         self._prefix = config.mqtt_prefix
         self._client: aiomqtt.Client | None = None
-        self._clean_modes: dict[str, str] = {}  # device_id -> "Normal" or "Matrix"
+        self._clean_modes: dict[str, str] = {}  # device_id -> "Normal", "Matrix", or "Deep"
         self._fan_speed_overrides: dict[str, str] = {}  # device_id -> user-set speed
         self._water_flow_overrides: dict[str, str] = {}  # device_id -> user-set flow level
         self._published_rooms: dict[str, set[str]] = {}  # device_id -> room slugs
@@ -80,6 +80,7 @@ class MqttClient:
                 "device": device.device_info,
                 "rooms": device.rooms,
                 "has_flow_mode": device.has_flow_mode,
+                "has_mop_plate": device.has_mop_plate,
             },
             sort_keys=True,
         )
@@ -401,7 +402,12 @@ class MqttClient:
                     retain=True,
                 )
 
-            # Clean mode select (Normal vs Matrix)
+            # Clean mode select. Deep (wet/mop) is only offered on models
+            # whose shadow carries MopPlateAttached — vac-only and no-plate
+            # devices can't honour it.
+            clean_mode_options = ["Normal", "Matrix"]
+            if device.has_mop_plate:
+                clean_mode_options.append("Deep")
             await self._publish(
                 f"{HA_DISCOVERY_PREFIX}/select/{uid}_clean_mode/config",
                 {
@@ -410,7 +416,7 @@ class MqttClient:
                     "object_id": f"{slug}_clean_mode",
                     "command_topic": f"{self._prefix}/{dsn}/clean_mode",
                     "state_topic": f"{self._prefix}/{dsn}/clean_mode/state",
-                    "options": ["Normal", "Matrix"],
+                    "options": clean_mode_options,
                     "icon": "mdi:broom",
                     "availability_topic": f"{self._prefix}/{dsn}/available",
                     "payload_available": "online",
@@ -557,7 +563,7 @@ class MqttClient:
                     )
                 elif topic.endswith("/clean_mode"):
                     mode = payload.strip()
-                    if mode in ("Normal", "Matrix"):
+                    if mode in ("Normal", "Matrix", "Deep"):
                         self._clean_modes[device_id] = mode
                         await self._publish(
                             f"{self._prefix}/{device_id}/clean_mode/state",
@@ -591,10 +597,12 @@ class MqttClient:
             return
 
         mode = self._clean_modes.get(device_id, "Normal")
-        if mode == "Matrix":
-            api_mode, clean_count = "UltraClean", 2
+        if mode == "Deep":
+            api_mode, clean_count, clean_type = "UserRoom", 1, "deep"
+        elif mode == "Matrix":
+            api_mode, clean_count, clean_type = "UltraClean", 2, "dry"
         else:
-            api_mode, clean_count = "UserRoom", 1
+            api_mode, clean_count, clean_type = "UserRoom", 1, "dry"
 
         use_v3 = getattr(device, "has_areas_v3", False)
         api_rooms = (
@@ -604,7 +612,7 @@ class MqttClient:
         )
         await handler.clean_rooms(
             device_id, rooms=api_rooms, floor_id=floor_id,
-            clean_type="dry", clean_count=clean_count, mode=api_mode,
+            clean_type=clean_type, clean_count=clean_count, mode=api_mode,
             use_v3=use_v3,
         )
         logger.info(

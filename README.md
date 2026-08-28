@@ -146,7 +146,7 @@ Each vacuum is automatically discovered by Home Assistant with the following ent
 | `binary_sensor.<name>_charging` | Binary Sensor | Charging state |
 | `binary_sensor.<name>_error` | Binary Sensor | Error state (on when error present) |
 | `button.<name>_clean_<room>` | Button | One-tap room cleaning (one per room) |
-| `select.<name>_clean_mode` | Select | Normal or Matrix (double-pass) cleaning mode |
+| `select.<name>_clean_mode` | Select | Normal, Matrix (double-pass), or Deep (wet) cleaning mode |
 | `select.<name>_water_flow` | Select | Mop water flow level (vac+mop models only) |
 
 Room buttons and the clean mode select appear automatically when room data is available from the Shark cloud. The water flow select appears only on models that report `Flow_Mode` -- i.e. those with a mop tank -- so vacuum-only models won't get a control their hardware ignores.
@@ -180,6 +180,7 @@ A **Clean Mode** select entity (`select.shark_robot_clean_mode`) lets you toggle
 
 - **Normal** — single-pass clean
 - **Matrix** — two-pass UltraClean (deep clean)
+- **Deep** — wet/mop clean; only appears on vac+mop models that report a mop plate
 
 The selected mode applies to all room button presses.
 

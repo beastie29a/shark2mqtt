@@ -236,6 +236,30 @@ async def test_clean_room_button_matrix_mode():
 
 
 @pytest.mark.asyncio
+async def test_clean_room_button_deep_mode():
+    """Room button press with Deep mode should send clean_type deep."""
+    dsn = "DSN123"
+    device = SharkVacuum.from_skegox(make_skegox_device(dsn=dsn))
+    device.floor_id = "FLOOR1"
+    device.rooms = ["Kitchen"]
+    devices = {dsn: device}
+
+    handler = AsyncMock()
+    messages = [
+        FakeMessage(f"shark2mqtt/{dsn}/clean_mode", "Deep"),
+        FakeMessage(f"shark2mqtt/{dsn}/clean_room", '{"room": "Kitchen"}'),
+    ]
+
+    await _run_listener_with_messages(messages, devices, handler=handler)
+
+    handler.clean_rooms.assert_awaited_once_with(
+        dsn, rooms=["Kitchen"], floor_id="FLOOR1",
+        clean_type="deep", clean_count=1, mode="UserRoom",
+        use_v3=False,
+    )
+
+
+@pytest.mark.asyncio
 async def test_clean_mode_updates_state():
     """Clean mode select should store the mode."""
     dsn = "DSN123"

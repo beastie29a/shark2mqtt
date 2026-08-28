@@ -23,6 +23,7 @@ from .const import (
     PROP_GET_EVACUATING,
     PROP_GET_EXTENDED_ERROR_CODE,
     PROP_GET_FLOW_MODE,
+    PROP_GET_MOP_PLATE_ATTACHED,
     PROP_GET_OPERATING_MODE,
     PROP_GET_POWER_MODE,
     PROP_GET_RECOMMEND_RANDR,
@@ -319,6 +320,17 @@ class SharkVacuum:
         so this works for skegox and Ayla alike.
         """
         return PROP_GET_FLOW_MODE in self._properties
+
+    @property
+    def has_mop_plate(self) -> bool:
+        """Whether this model supports the "Deep" (wet) clean type.
+
+        Only the vac+mop models that can run the Deep/wet clean carry
+        MopPlateAttached in their reported properties. It is the
+        discriminator for offering a Deep option on the Clean Mode select,
+        since a vac+mop model that lacks a mop plate can't honour it.
+        """
+        return PROP_GET_MOP_PLATE_ATTACHED in self._properties
 
     @property
     def rssi(self) -> int:

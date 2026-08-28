@@ -130,6 +130,10 @@ PROP_GET_SCHEDULE = "GET_Schedule"
 # eco/normal/max scale as Power_Mode — confirmed against the SharkClean
 # app's "Water Flow Level" slider on a RV2820YEUS unit.
 PROP_GET_FLOW_MODE = "GET_Flow_Mode"
+# Mop plate attached flag. Only the vac+mop models that support the
+# "Deep" (wet) clean type carry MopPlateAttached in their reported
+# properties, so it is the discriminator for offering a Deep clean mode.
+PROP_GET_MOP_PLATE_ATTACHED = "GET_MopPlateAttached"
 
 # Write properties (used with POST /datapoints.json)
 PROP_SET_OPERATING_MODE = "SET_Operating_Mode"

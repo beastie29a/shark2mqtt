@@ -39,6 +39,24 @@ def make_mop_vacuum(
     return SharkVacuum.from_skegox(data)
 
 
+def make_deep_vacuum(operating_mode: int = 0) -> SharkVacuum:
+    """A vac+mop combo model carrying MopPlateAttached (i.e. it can run the
+    "Deep" wet clean type).
+
+    Mirrors the Steve/Liz comparison: the combo device's shadow has
+    MopPlateAttached and the vac-only one doesn't, even though both carry
+    Flow_Mode. So MopPlateAttached, not Flow_Mode, is the Deep discriminator.
+    A room list is set so the Clean Mode select (which needs device.rooms)
+    is published.
+    """
+    data = make_skegox_device(operating_mode=operating_mode)
+    reported = data["shadow"]["properties"]["reported"]
+    reported["Robot_Room_List"] = {"value": "FLOOR1:AZ_1:AZ_2"}
+    reported["Flow_Mode"] = {"value": 1}
+    reported["MopPlateAttached"] = {"value": True}
+    return SharkVacuum.from_skegox(data)
+
+
 class TestDockedState:
     def test_docked_status_docked(self):
         vac = make_vacuum(operating_mode=0, docked_status=1)
@@ -182,6 +200,46 @@ class TestFlowModeCapability:
         await client.publish_discovery(make_mop_vacuum(flow_mode=1))
         topics = [c.args[0] for c in client._publish.call_args_list]
         assert any("_water_flow/config" in t for t in topics)
+
+
+class TestMopPlateCapability:
+    """Deep (wet) clean support — only models with a mop plate may offer it."""
+
+    def test_vac_only_has_no_mop_plate(self):
+        assert make_vacuum().has_mop_plate is False
+
+    def test_mop_model_without_plate_has_no_deep(self):
+        # A vac+mop model that has Flow_Mode but no MopPlateAttached must
+        # NOT advertise Deep — that's the whole point of the key.
+        assert make_mop_vacuum(flow_mode=1).has_mop_plate is False
+
+    def test_deep_model_has_mop_plate(self):
+        assert make_deep_vacuum().has_mop_plate is True
+
+    def _clean_mode_options(self, client):
+        for call in client._publish.call_args_list:
+            if "_clean_mode/config" in call.args[0]:
+                return call.args[1]["options"]
+        raise AssertionError("Clean Mode select not published")
+
+    @pytest.mark.asyncio
+    async def test_discovery_deep_option_only_for_mop_plate(self, mock_config):
+        # Deep model (has rooms + MopPlateAttached) gets the Deep option.
+        client = MqttClient(mock_config)
+        client._publish = AsyncMock()
+        await client.publish_discovery(make_deep_vacuum())
+        assert self._clean_mode_options(client) == ["Normal", "Matrix", "Deep"]
+
+    @pytest.mark.asyncio
+    async def test_discovery_no_deep_option_without_mop_plate(self, mock_config):
+        # Vac-only device: build one with rooms so the select is published,
+        # then confirm it lacks Deep.
+        vac = make_vacuum()
+        vac.rooms = ["Kitchen"]
+        client = MqttClient(mock_config)
+        client._publish = AsyncMock()
+        await client.publish_discovery(vac)
+        assert self._clean_mode_options(client) == ["Normal", "Matrix"]
 
 
 class TestWaterFlowOverrideWhileDocked:

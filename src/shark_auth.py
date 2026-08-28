@@ -419,7 +419,7 @@ class SharkAuth:
                 text = (await loc.first.inner_text()).strip()
                 if text:
                     return text
-            except Exception:
+            except (AttributeError, RuntimeError, TimeoutError, TypeError):
                 continue
         return None
 
