@@ -73,6 +73,7 @@ volumes:
 | `MQTT_PREFIX` | No | `shark2mqtt` | MQTT topic prefix |
 | `POLL_INTERVAL` | No | `300` | Polling interval in seconds |
 | `POLL_INTERVAL_ACTIVE` | No | `20` | Polling interval while cleaning |
+| `MAP_POLL_INTERVAL` | No | `30` | Visual_Floor_1 pose polling interval while cleaning |
 | `TOKEN_DIR` | No | `/data` | Directory for persisted auth tokens |
 | `LOG_LEVEL` | No | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 
@@ -152,6 +153,14 @@ Each vacuum is automatically discovered by Home Assistant with the following ent
 Room buttons and the clean mode select appear automatically when room data is available from the Shark cloud. The water flow select appears only on models that report `Flow_Mode` -- i.e. those with a mop tank -- so vacuum-only models won't get a control their hardware ignores.
 
 An error device trigger fires when a new error is detected, usable in HA automations.
+
+### Map Updates
+
+`Visual_Floor_1` contains the robot pose as `(x, y, heading)` and is polled while
+cleaning. The Skegox device response currently exposes live battery and RSSI
+telemetry plus operating-state shadow properties, but no pose or location field.
+The map image therefore updates from `Visual_Floor_1`; reduce `MAP_POLL_INTERVAL`
+to request pose snapshots more frequently.
 
 ### Vacuum States
 

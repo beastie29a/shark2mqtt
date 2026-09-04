@@ -42,7 +42,14 @@ def _is_mqtt_auth_failure(err: aiomqtt.MqttError) -> bool:
     return getattr(rc, "value", rc) in _MQTT_AUTH_RCS
 
 logger = logging.getLogger("shark2mqtt")
-IMAGE_CACHE_INTERVAL = 30
+
+
+def _map_geometry(parsed_map: dict[str, Any]) -> dict[str, Any]:
+    """Return the static render inputs from a parsed floor map."""
+    return {
+        key: parsed_map[key]
+        for key in ("name", "map_id", "grid", "zones", "boundaries")
+    }
 
 class CommandRouter:
     """Routes commands to the correct API based on per-device api_backend."""
@@ -127,7 +134,7 @@ async def _fetch_skegox_visual_floor(
     """
     source = "Skegox Visual_Floor_1"
     try:
-        body = await api.fetch_property_file(dsn, "Visual_Floor_1")
+        body = await api.fetch_property_file(dsn, "Visual_Floor_1", cache_bust=True)
     except Exception as e:
         logger.debug("Skegox Visual_Floor_1 fetch failed for %s: %s", product_name, e, exc_info=True)
         return b""
@@ -179,7 +186,8 @@ async def poll_loop(
     # every cycle would waste API calls and S3 presigned URLs.
     skegox_mard_cache: dict[str, MardData] = {}
     floor_map_last_update: dict[str, float] = {}
-    shegox_floor_map_bin = None
+    floor_map_geometry: dict[str, dict[str, Any]] = {}
+    floor_map_pose: dict[str, tuple[float, float, float] | None] = {}
 
     while True:
         any_active = False
@@ -212,12 +220,23 @@ async def poll_loop(
                 ayla = ayla_mard.get(device.dsn)
 
                 # Check if we should update the floor map
-                # Always update on first fetch, otherwise only if cleaning and cache interval has passed
+                # Fetch once for the initial map, then poll for pose updates
+                # only while the robot is cleaning.
                 last_update = floor_map_last_update.get(device.dsn, 0.0)
                 is_cleaning = device.ha_state == "cleaning"
+                live_location_switch = device._properties.get("GET_live_location_switch")
+                if is_cleaning and live_location_switch == 0:
+                    logger.warning(
+                        "Live location is disabled for %s; Visual_Floor_1 may keep "
+                        "returning a stale robot pose",
+                        device.product_name,
+                    )
                 should_update_map = (
-                    shegox_floor_map_bin is None or  # First time, always fetch
-                    (is_cleaning and (time.time() - last_update) >= IMAGE_CACHE_INTERVAL)
+                    device.dsn not in floor_map_geometry
+                    or (
+                        is_cleaning
+                        and (time.time() - last_update) >= config.map_poll_interval
+                    )
                 )
 
                 if should_update_map:
@@ -233,13 +252,41 @@ async def poll_loop(
                         # Parse and publish the floor map image
                         try:
                             parsed_map = parse_floor_map_bytes(visual_floor_data)
-                            await mqtt.publish_map_image(device, parsed_map)
-                            logger.info(f"Published floor map image for {device.product_name}")
-                            # Update the cache timestamp on successful publish
+                            geometry = _map_geometry(parsed_map)
+                            pose = parsed_map.get("pose")
+                            cached_geometry = floor_map_geometry.get(device.dsn)
+                            geometry_changed = cached_geometry != geometry
+                            pose_changed = (
+                                device.dsn not in floor_map_pose
+                                or floor_map_pose[device.dsn] != pose
+                            )
+
+                            if geometry_changed or pose_changed:
+                                render_geometry = geometry if geometry_changed else cached_geometry
+                                await mqtt.publish_map_image(
+                                    device, {**render_geometry, "pose": pose},
+                                )
+                                floor_map_geometry[device.dsn] = geometry
+                                floor_map_pose[device.dsn] = pose
+                                logger.info(
+                                    "Published floor map image for %s (pose_changed=%s, "
+                                    "geometry_changed=%s)",
+                                    device.product_name,
+                                    pose_changed,
+                                    geometry_changed,
+                                )
+                            else:
+                                logger.debug(
+                                    "Visual_Floor_1 pose unchanged for %s; "
+                                    "skipping image publication",
+                                    device.product_name,
+                                )
+
+                            # Update the fetch timestamp after a valid parse,
+                            # even when the pose did not change.
                             floor_map_last_update[device.dsn] = time.time()
                         except (TypeError, ValueError, OSError, TimeoutError, aiomqtt.MqttError) as e:
                             logger.error(f"Failed to parse/publish floor map: {e}")
-                    shegox_floor_map_bin = visual_floor_data or {}
 
                 if skegox_mard.rooms:
                     if first_poll:
