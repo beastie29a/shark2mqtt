@@ -74,6 +74,7 @@ volumes:
 | `POLL_INTERVAL` | No | `300` | Polling interval in seconds |
 | `POLL_INTERVAL_ACTIVE` | No | `20` | Polling interval while cleaning |
 | `MAP_POLL_INTERVAL` | No | `30` | Visual_Floor_1 pose polling interval while cleaning |
+| `MAP_ENABLE_LIVE_LOCATION` | No | `true` | Enable live pose uploads on supported devices |
 | `TOKEN_DIR` | No | `/data` | Directory for persisted auth tokens |
 | `LOG_LEVEL` | No | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 

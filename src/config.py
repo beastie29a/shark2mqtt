@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     poll_interval: int = 300
     poll_interval_active: int = 20
     map_poll_interval: int = Field(default=30, ge=1)
+    map_enable_live_location: bool = True
 
     # Token persistence
     token_dir: str = "/data"
