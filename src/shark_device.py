@@ -9,8 +9,6 @@ from .const import (
     ERROR_CODES,
     OPERATING_MODE_TO_HA_STATE,
     POWER_MODE_NAMES,
-    OperatingMode,
-    PowerMode,
     PROP_GET_BATTERY_CAPACITY,
     PROP_GET_CHARGING_STATUS,
     PROP_GET_DEVICE_MODEL_NUMBER,
@@ -32,6 +30,8 @@ from .const import (
     PROP_GET_RUN_TIME_CUMULATIVE,
     PROP_GET_SCHEDULE,
     PROP_GET_WARNING_CODE,
+    OperatingMode,
+    PowerMode,
 )
 
 logger = logging.getLogger(__name__)

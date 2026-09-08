@@ -25,7 +25,6 @@ import math
 import struct
 import sys
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -706,12 +705,12 @@ def render_floor_map_pillow(parsed, output=None, dpi=150, show_zones=True, show_
     cols = grid["height"]  # header "height" = cell columns (x-direction)
     x_min, x_max = ox, ox + cols * res
     y_min, y_max = oy, oy + rows * res
-    img_w = max(1, int(round((x_max - x_min) * _PX_PER_M)))
-    img_h = max(1, int(round((y_max - y_min) * _PX_PER_M)))
+    img_w = max(1, round((x_max - x_min) * _PX_PER_M))
+    img_h = max(1, round((y_max - y_min) * _PX_PER_M))
 
     def w2p(x, y):
         """World meters (y up) -> image pixels (y down)."""
-        return (int(round((x - x_min) * _PX_PER_M)), int(round((y_max - y) * _PX_PER_M)))
+        return (round((x - x_min) * _PX_PER_M), round((y_max - y) * _PX_PER_M))
 
     # Floor base: map each cell category to a Roborock color, then upscale.
     cat_color = {
@@ -759,14 +758,14 @@ def render_floor_map_pillow(parsed, output=None, dpi=150, show_zones=True, show_
     if pose:
         px, py, pz = pose
         cx, cy = w2p(px, py)
-        r = max(6, int(round(_ROBOT_RADIUS_M * _PX_PER_M)))
+        r = max(6, round(_ROBOT_RADIUS_M * _PX_PER_M))
         fill = tuple(palette.get_color(SupportedColor.ROBO)[:3])
         outline = tuple(palette.get_color(SupportedColor.ROBO_OUTLINE)[:3])
         _draw_robot(fd, cx, cy, math.degrees(pz), r, outline, fill)
 
     # Zone labels on top, with a halo for legibility.
     if show_zones:
-        font = ImageFont.load_default(size=max(10, int(round(_PX_PER_M / 6))))
+        font = ImageFont.load_default(size=max(10, round(_PX_PER_M / 6)))
         for zone in parsed["zones"]:
             pts = zone.get("boundary", [])
             if len(pts) < 3:
