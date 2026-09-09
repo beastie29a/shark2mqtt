@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -384,6 +385,35 @@ class SharkVacuum:
     def schedule(self) -> dict[str, Any] | None:
         val = self._get_prop(PROP_GET_SCHEDULE)
         return val if isinstance(val, dict) and val else None
+
+    @property
+    def live_location(self) -> tuple[float, float, float] | None:
+        """Live robot pose as (x, y, theta) in meters/radians, or None.
+
+        Not all models support live location. On supported models the
+        skegox telemetry carries a `LiveLocation` entry that is a
+        JSON-encoded *string* (not a nested object) with `x_coord`,
+        `y_coord`, and `theta` keys. On unsupported models the key is
+        absent entirely (e.g. RV2500AX), so its absence is the
+        capability signal.
+        """
+        raw = self._properties.get("GET_LiveLocation")
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        try:
+            return (
+                float(data["x_coord"]),
+                float(data["y_coord"]),
+                float(data["theta"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
     # --- MQTT payloads ---
 

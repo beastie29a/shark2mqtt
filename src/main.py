@@ -51,6 +51,21 @@ def _map_geometry(parsed_map: dict[str, Any]) -> dict[str, Any]:
         for key in ("name", "map_id", "grid", "zones", "boundaries")
     }
 
+
+def _floor_file_updated_at(raw: dict[str, Any]) -> str:
+    """Return the shadow `fileList.Visual_Floor_1.updatedAt` timestamp.
+
+    The device reports when it last rewrote the Visual_Floor_1 file.
+    The file is static throughout a cleaning run, so this timestamp is
+    the change signal for re-fetching it.
+    """
+    reported = raw.get("shadow", {}).get("properties", {}).get("reported", {})
+    file_list = reported.get("fileList", {})
+    entry = file_list.get("Visual_Floor_1", {})
+    if not isinstance(entry, dict):
+        return ""
+    return str(entry.get("updatedAt", "") or "")
+
 class CommandRouter:
     """Routes commands to the correct API based on per-device api_backend."""
 
@@ -223,7 +238,10 @@ async def poll_loop(
     # only changes on room edits/map saves, not per poll, so re-fetching
     # every cycle would waste API calls and S3 presigned URLs.
     skegox_mard_cache: dict[str, MardData] = {}
-    floor_map_last_update: dict[str, float] = {}
+    # Last-seen shadow `fileList.Visual_Floor_1.updatedAt` per device.
+    # The .bin is static during a run; only re-fetch when the device
+    # reports a newer file timestamp.
+    floor_map_updated_at: dict[str, str] = {}
     floor_map_geometry: dict[str, dict[str, Any]] = {}
     floor_map_pose: dict[str, tuple[float, float, float] | None] = {}
     live_location_configured: set[str] = set()
@@ -264,24 +282,14 @@ async def poll_loop(
                     config.map_enable_live_location,
                 )
 
-                # Check if we should update the floor map
-                # Fetch once for the initial map, then poll for pose updates
-                # only while the robot is cleaning.
-                last_update = floor_map_last_update.get(device.dsn, 0.0)
-                is_cleaning = device.ha_state == "cleaning"
-                live_location_switch = device._properties.get("GET_live_location_switch")
-                if is_cleaning and live_location_switch == 0 and not config.map_enable_live_location:
-                    logger.warning(
-                        "Live location is disabled for %s; Visual_Floor_1 may keep "
-                        "returning a stale robot pose",
-                        device.product_name,
-                    )
+                # Check if we should update the floor map. The
+                # Visual_Floor_1 file is static throughout a cleaning
+                # run, so only re-fetch when the device reports a newer
+                # file timestamp in the shadow fileList.
+                updated_at = _floor_file_updated_at(raw)
                 should_update_map = (
                     device.dsn not in floor_map_geometry
-                    or (
-                        is_cleaning
-                        and (time.time() - last_update) >= config.map_poll_interval
-                    )
+                    or updated_at != floor_map_updated_at.get(device.dsn, "")
                 )
 
                 if should_update_map:
@@ -298,7 +306,10 @@ async def poll_loop(
                         try:
                             parsed_map = parse_floor_map_bytes(visual_floor_data)
                             geometry = _map_geometry(parsed_map)
-                            pose = parsed_map.get("pose")
+                            # The .bin pose is static throughout a run;
+                            # prefer the live telemetry pose when the
+                            # device supports it.
+                            pose = device.live_location or parsed_map.get("pose")
                             cached_geometry = floor_map_geometry.get(device.dsn)
                             geometry_changed = cached_geometry != geometry
                             pose_changed = (
@@ -327,11 +338,26 @@ async def poll_loop(
                                     device.product_name,
                                 )
 
-                            # Update the fetch timestamp after a valid parse,
-                            # even when the pose did not change.
-                            floor_map_last_update[device.dsn] = time.time()
+                            # Record the file timestamp after a valid
+                            # parse, even when the pose did not change.
+                            floor_map_updated_at[device.dsn] = updated_at
                         except (TypeError, ValueError, OSError, TimeoutError, aiomqtt.MqttError) as e:
                             logger.error(f"Failed to parse/publish floor map: {e}")
+
+                # Live pose updates: telemetry.LiveLocation changes every
+                # poll on supported models, so publish whenever it moves
+                # even though the Visual_Floor_1 file itself is static.
+                live_pose = device.live_location
+                if live_pose and device.dsn in floor_map_geometry:
+                    if floor_map_pose.get(device.dsn) != live_pose:
+                        try:
+                            await mqtt.publish_map_image(
+                                device,
+                                {**floor_map_geometry[device.dsn], "pose": live_pose},
+                            )
+                            floor_map_pose[device.dsn] = live_pose
+                        except (TypeError, ValueError, OSError, TimeoutError, aiomqtt.MqttError) as e:
+                            logger.error(f"Failed to publish live pose for {device.product_name}: {e}")
 
                 if skegox_mard.rooms:
                     if first_poll:

@@ -73,8 +73,7 @@ volumes:
 | `MQTT_PREFIX` | No | `shark2mqtt` | MQTT topic prefix |
 | `POLL_INTERVAL` | No | `300` | Polling interval in seconds |
 | `POLL_INTERVAL_ACTIVE` | No | `20` | Polling interval while cleaning |
-| `MAP_POLL_INTERVAL` | No | `30` | Visual_Floor_1 pose polling interval while cleaning |
-| `MAP_ENABLE_LIVE_LOCATION` | No | `true` | Enable live pose uploads on supported devices |
+| `MAP_ENABLE_LIVE_LOCATION` | No | `true` | Ask devices to upload live pose telemetry |
 | `TOKEN_DIR` | No | `/data` | Directory for persisted auth tokens |
 | `LOG_LEVEL` | No | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 
@@ -157,11 +156,16 @@ An error device trigger fires when a new error is detected, usable in HA automat
 
 ### Map Updates
 
-`Visual_Floor_1` contains the robot pose as `(x, y, heading)` and is polled while
-cleaning. The Skegox device response currently exposes live battery and RSSI
-telemetry plus operating-state shadow properties, but no pose or location field.
-The map image therefore updates from `Visual_Floor_1`; reduce `MAP_POLL_INTERVAL`
-to request pose snapshots more frequently.
+The map image is built from two sources:
+
+- **Geometry** (grid, zones, boundaries) comes from the `Visual_Floor_1`
+  property file. The file is static throughout a cleaning run, so it is
+  only fetched when the device reports a newer `fileList.Visual_Floor_1`
+  `updatedAt` timestamp in its shadow — not on a timer.
+- **Robot pose** comes from the `telemetry.LiveLocation` field, which
+  updates every poll on supported models. Not all models support live
+  location (the field is simply absent from their telemetry); those fall
+  back to the static pose embedded in `Visual_Floor_1`.
 
 ### Vacuum States
 
