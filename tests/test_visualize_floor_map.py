@@ -4,17 +4,17 @@ import struct
 import numpy as np
 import pytest
 from PIL import Image
+from vacuum_map_parser_base.config.color import ColorsPalette, SupportedColor
 
 from src.visualize_floor_map import (
+    _grid_zone_coverage,
+    _pick_grid,
     build_grid_image,
     decode_boundary_payload,
     decode_pose,
     decode_zone,
     render_floor_map_pillow,
-    _grid_zone_coverage,
-    _pick_grid,
 )
-from vacuum_map_parser_base.config.color import ColorsPalette, SupportedColor
 
 palette = ColorsPalette()
 

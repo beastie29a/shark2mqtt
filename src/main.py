@@ -183,43 +183,6 @@ async def _fetch_skegox_visual_floor(
     return body
 
 
-async def _ensure_live_location(
-    api: SkegoxApi,
-    device: SharkVacuum,
-    configured_devices: set[str],
-    enabled: bool,
-) -> None:
-    """Enable the device setting required for live pose snapshots."""
-    if not enabled:
-        return
-
-    current = device._properties.get("GET_live_location_switch")
-    if current == 1:
-        configured_devices.add(device.dsn)
-        return
-
-    if device.dsn in configured_devices:
-        logger.debug(
-            "Live location request for %s is pending device acknowledgement",
-            device.product_name,
-        )
-
-    try:
-        await api.set_desired_property(device.dsn, "live_location_switch", 1)
-    except Exception:
-        logger.warning(
-            "Could not enable live location for %s; map poses may remain stale",
-            device.product_name,
-            exc_info=True,
-        )
-        return
-
-    logger.info(
-        "Requested live location for %s; waiting for device acknowledgement",
-        device.product_name,
-    )
-
-
 async def poll_loop(
     api: SkegoxApi,
     ayla_api: AylaApi,
@@ -244,7 +207,6 @@ async def poll_loop(
     floor_map_updated_at: dict[str, str] = {}
     floor_map_geometry: dict[str, dict[str, Any]] = {}
     floor_map_pose: dict[str, tuple[float, float, float] | None] = {}
-    live_location_configured: set[str] = set()
 
     while True:
         any_active = False
@@ -275,12 +237,6 @@ async def poll_loop(
                     if skegox_mard.rooms:
                         skegox_mard_cache[device.dsn] = skegox_mard
                 ayla = ayla_mard.get(device.dsn)
-                await _ensure_live_location(
-                    api,
-                    device,
-                    live_location_configured,
-                    config.map_enable_live_location,
-                )
 
                 # Check if we should update the floor map. The
                 # Visual_Floor_1 file is static throughout a cleaning

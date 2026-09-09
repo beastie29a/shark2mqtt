@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import aiohttp
 from tenacity import (
@@ -555,7 +555,7 @@ class AylaApi:
 
     # --- Commands ---
 
-    _COMMAND_MAP: ClassVar[dict[str, tuple[str, int]]] = {
+    _COMMAND_MAP: dict[str, tuple[str, int]] = {
         "start": (PROP_SET_OPERATING_MODE, OperatingMode.START),
         "stop": (PROP_SET_OPERATING_MODE, OperatingMode.STOP),
         "pause": (PROP_SET_OPERATING_MODE, OperatingMode.PAUSE),

@@ -160,28 +160,29 @@ class SharkAuth:
             "refresh_token": self._tokens.auth0_refresh_token,
         }
 
-        async with aiohttp.ClientSession() as session, session.post(
-            self._region.auth0_token_url, json=payload
-        ) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                error = data.get("error", "unknown")
-                desc = data.get("error_description", "")
-                if resp.status == 429:
-                    raise SharkAuthLockedError(
-                        f"Auth0 rate limited: {error} {desc}"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self._region.auth0_token_url, json=payload
+            ) as resp:
+                data = await resp.json()
+                if resp.status != 200:
+                    error = data.get("error", "unknown")
+                    desc = data.get("error_description", "")
+                    if resp.status == 429:
+                        raise SharkAuthLockedError(
+                            f"Auth0 rate limited: {error} {desc}"
+                        )
+                    raise SharkAuthError(
+                        f"Auth0 refresh failed ({resp.status}): {error} {desc}"
                     )
-                raise SharkAuthError(
-                    f"Auth0 refresh failed ({resp.status}): {error} {desc}"
-                )
 
-            self._tokens.auth0_id_token = data["id_token"]
-            self._tokens.auth0_access_token = data.get("access_token")
-            # Auth0 may rotate the refresh token
-            if "refresh_token" in data:
-                self._tokens.auth0_refresh_token = data["refresh_token"]
-            self._save_tokens()
-            logger.info("Auth0 token refreshed successfully")
+                self._tokens.auth0_id_token = data["id_token"]
+                self._tokens.auth0_access_token = data.get("access_token")
+                # Auth0 may rotate the refresh token
+                if "refresh_token" in data:
+                    self._tokens.auth0_refresh_token = data["refresh_token"]
+                self._save_tokens()
+                logger.info("Auth0 token refreshed successfully")
 
     async def _browser_authenticate(self) -> None:
         """Authenticate via headless Chromium browser with PKCE.
@@ -294,7 +295,7 @@ class SharkAuth:
                             await checkbox.click(timeout=10000)
                             # Wait for Turnstile to verify
                             await page.wait_for_timeout(5000)
-                    except Exception as captcha_err:  # noqa: BLE001 - Playwright raises varied exception types
+                    except Exception as captcha_err:
                         logger.debug("CAPTCHA handling: %s", captcha_err)
 
                     # Click Continue/Submit (Auth0 uses "Continue" button)
@@ -326,14 +327,14 @@ class SharkAuth:
                         skip_btn = page.locator('text="Continue without passkeys"')
                         await skip_btn.click(timeout=10000)
                         logger.debug("Skipped passkey enrollment")
-                    except Exception:  # noqa: BLE001 - Playwright raises varied exception types
-                        logger.debug("Passkey interstitial not present")
+                    except Exception:
+                        pass  # Interstitial may not appear
 
                     # Wait for the redirect interception to capture the code
                     code = await asyncio.wait_for(auth_code_future, timeout=60)
                     logger.info("Auth code captured from redirect")
 
-                except Exception as exc:  # noqa: BLE001 - Playwright raises varied exception types
+                except Exception as exc:
                     auth_error = exc
                     # Scrape any visible Auth0 error and note which step we
                     # reached, then screenshot — all while the page is alive.
@@ -418,8 +419,7 @@ class SharkAuth:
                 text = (await loc.first.inner_text()).strip()
                 if text:
                     return text
-            except Exception:  # noqa: BLE001 - Playwright raises varied exception types
-                logger.debug("Error extracting page error for selector %s", selector)
+            except Exception:
                 continue
         return None
 
@@ -432,7 +432,7 @@ class SharkAuth:
             )
             await page.screenshot(path=screenshot_path)
             logger.error("Auth failure screenshot saved to %s", screenshot_path)
-        except Exception:  # noqa: BLE001 - Playwright raises varied exception types
+        except Exception:
             logger.debug("Could not save failure screenshot")
 
     @staticmethod
@@ -469,24 +469,25 @@ class SharkAuth:
             "redirect_uri": self._region.auth0_redirect_uri,
         }
 
-        async with aiohttp.ClientSession() as session, session.post(
-            self._region.auth0_token_url, json=payload
-        ) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                error = data.get("error", "unknown")
-                desc = data.get("error_description", "")
-                raise SharkAuthError(
-                    f"Auth0 code exchange failed ({resp.status}): {error} {desc}"
-                )
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self._region.auth0_token_url, json=payload
+            ) as resp:
+                data = await resp.json()
+                if resp.status != 200:
+                    error = data.get("error", "unknown")
+                    desc = data.get("error_description", "")
+                    raise SharkAuthError(
+                        f"Auth0 code exchange failed ({resp.status}): {error} {desc}"
+                    )
 
-            if not self._tokens:
-                self._tokens = TokenData()
-            self._tokens.auth0_id_token = data["id_token"]
-            self._tokens.auth0_access_token = data.get("access_token")
-            self._tokens.auth0_refresh_token = data.get("refresh_token")
-            self._save_tokens()
-            logger.info("Auth0 code exchange successful")
+                if not self._tokens:
+                    self._tokens = TokenData()
+                self._tokens.auth0_id_token = data["id_token"]
+                self._tokens.auth0_access_token = data.get("access_token")
+                self._tokens.auth0_refresh_token = data.get("refresh_token")
+                self._save_tokens()
+                logger.info("Auth0 code exchange successful")
 
     # --- Token persistence ---
 

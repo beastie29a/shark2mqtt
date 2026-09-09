@@ -602,18 +602,12 @@ class MqttClient:
                 elif topic.endswith("/send_command"):
                     logger.info("send_command received for %s", device_id)
                     await self._handle_send_command(
-                        command_handler,
-                        device_id,
-                        payload,
-                        devices,
+                        command_handler, device_id, payload, devices,
                     )
                 elif topic.endswith("/clean_room"):
                     logger.info("clean_room button pressed for %s", device_id)
                     await self._handle_clean_room(
-                        command_handler,
-                        device_id,
-                        payload,
-                        devices,
+                        command_handler, device_id, payload, devices,
                     )
                 elif topic.endswith("/clean_mode"):
                     mode = payload.strip()
@@ -621,8 +615,7 @@ class MqttClient:
                         self._clean_modes[device_id] = mode
                         await self._publish(
                             f"{self._prefix}/{device_id}/clean_mode/state",
-                            mode,
-                            retain=True,
+                            mode, retain=True,
                         )
                         logger.info("Clean mode set to %s for %s", mode, device_id)
                     else:
@@ -633,10 +626,7 @@ class MqttClient:
                 logger.exception("Failed to handle command on %s", topic)
 
     async def _handle_clean_room(
-        self,
-        handler: Any,
-        device_id: str,
-        payload: str,
+        self, handler: Any, device_id: str, payload: str,
         devices: dict[str, Any],
     ) -> None:
         """Handle room button press — dispatches clean_rooms with current mode."""
@@ -661,29 +651,24 @@ class MqttClient:
             api_mode, clean_count = "UserRoom", 1
 
         use_v3 = getattr(device, "has_areas_v3", False)
-        api_rooms = device.to_robot_room_names([room]) if device and hasattr(device, "to_robot_room_names") else [room]
+        api_rooms = (
+            device.to_robot_room_names([room])
+            if device and hasattr(device, "to_robot_room_names")
+            else [room]
+        )
         await handler.clean_rooms(
-            device_id,
-            rooms=api_rooms,
-            floor_id=floor_id,
-            clean_type="dry",
-            clean_count=clean_count,
-            mode=api_mode,
+            device_id, rooms=api_rooms, floor_id=floor_id,
+            clean_type="dry", clean_count=clean_count, mode=api_mode,
             use_v3=use_v3,
         )
         logger.info(
             "Room clean started: %s (api=%s) on %s (mode=%s)",
-            room,
-            api_rooms,
-            device_id,
-            mode,
+            room, api_rooms, device_id, mode,
         )
 
     @staticmethod
     async def _handle_send_command(
-        handler: Any,
-        device_id: str,
-        payload: str,
+        handler: Any, device_id: str, payload: str,
         devices: dict[str, Any],
     ) -> None:
         """Handle vacuum.send_command from HA.
@@ -697,7 +682,6 @@ class MqttClient:
                           clean_count: 1, clean_type: "dry"}
         """
         import json as _json
-
         # HA may publish the command as raw JSON ({"command": "..."}) or as a
         # plain command string (e.g. "vacuum_and_mop"). Accept both.
         try:
@@ -749,13 +733,9 @@ class MqttClient:
                 logger.warning("clean_room: no floor_id available")
                 return
             await handler.clean_rooms(
-                device_id,
-                rooms=to_api_rooms([room]),
-                floor_id=floor_id,
+                device_id, rooms=to_api_rooms([room]), floor_id=floor_id,
                 clean_type=params.get("clean_type", "dry"),
-                clean_count=1,
-                mode="UserRoom",
-                use_v3=use_v3,
+                clean_count=1, mode="UserRoom", use_v3=use_v3,
             )
 
         elif command == "matrix_clean":
@@ -768,13 +748,9 @@ class MqttClient:
                 logger.warning("matrix_clean: no floor_id available")
                 return
             await handler.clean_rooms(
-                device_id,
-                rooms=to_api_rooms([room]),
-                floor_id=floor_id,
+                device_id, rooms=to_api_rooms([room]), floor_id=floor_id,
                 clean_type=params.get("clean_type", "dry"),
-                clean_count=2,
-                mode="UltraClean",
-                use_v3=use_v3,
+                clean_count=2, mode="UltraClean", use_v3=use_v3,
             )
 
         elif command == "clean_rooms":
@@ -787,13 +763,10 @@ class MqttClient:
                 logger.warning("clean_rooms: no floor_id available")
                 return
             await handler.clean_rooms(
-                device_id,
-                rooms=to_api_rooms(rooms),
-                floor_id=floor_id,
+                device_id, rooms=to_api_rooms(rooms), floor_id=floor_id,
                 clean_type=params.get("clean_type", "dry"),
                 clean_count=params.get("clean_count", 1),
-                mode=params.get("mode", "UserRoom"),
-                use_v3=use_v3,
+                mode=params.get("mode", "UserRoom"), use_v3=use_v3,
             )
 
         else:
