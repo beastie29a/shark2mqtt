@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import signal
-import time
-from pathlib import Path
 from typing import Any
 
 import aiomqtt
-import filetype
 
 from .ayla_api import AylaApi, MardData, debug_dump_mard_structure, parse_mard
 from .config import Settings
@@ -21,9 +17,9 @@ from .mqtt_client import MqttClient
 from .shark_auth import SharkAuth
 from .shark_device import SharkVacuum
 from .skegox_api import SkegoxApi
+from .visualize_floor_map import VisualizeFloorMap
 
-# Import floor map parsing function
-from .visualize_floor_map import parse_floor_map_bytes
+logger = logging.getLogger("shark2mqtt")
 
 # Broker CONNACK codes that mean "your credentials were refused" rather than
 # "the broker is unreachable". 4/5 are MQTT 3.1.1 CONNACK codes; 134/135 are
@@ -40,8 +36,6 @@ def _is_mqtt_auth_failure(err: aiomqtt.MqttError) -> bool:
     """
     rc = getattr(err, "rc", None)
     return getattr(rc, "value", rc) in _MQTT_AUTH_RCS
-
-logger = logging.getLogger("shark2mqtt")
 
 
 def _map_geometry(parsed_map: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +141,6 @@ async def _fetch_skegox_visual_floor(
     This method fetches the Visual_Floor_1 property from Skegox API
     and returns it as bytes.
     """
-    source = "Skegox Visual_Floor_1"
     try:
         body = await api.fetch_property_file(dsn, "Visual_Floor_1", cache_bust=True)
     except Exception as e:
@@ -170,16 +163,6 @@ async def _fetch_skegox_visual_floor(
             len(body),
         )
 
-    try:
-        parsed = body.decode("utf-8", errors='replace')
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        logger.debug("%s for %s: not valid JSON", source, product_name)
-        return {}
-
-    logger.debug("Decoded Body Type: %s", type(parsed))
-    # Optionally, you can add code here to identify the file type
-    # For example, checking magic numbers or headers
-
     return body
 
 
@@ -187,6 +170,7 @@ async def poll_loop(
     api: SkegoxApi,
     ayla_api: AylaApi,
     mqtt: MqttClient,
+    visual_floor_map: VisualizeFloorMap,
     auth: SharkAuth,
     config: Settings,
     devices_map: dict[str, SharkVacuum],
@@ -251,19 +235,11 @@ async def poll_loop(
                 if should_update_map:
                     visual_floor_data = await _fetch_skegox_visual_floor(api, device.dsn, device.product_name)
                     if visual_floor_data:
-                        image_type = filetype.guess_mime(visual_floor_data) or type(visual_floor_data)
-                        out_path = Path(f"Visual_Floor_1_{int(time.time())}.bin")
-                        with Path.open(out_path, "wb") as fp:
-                            fp.write(visual_floor_data)
-                        logger.info(f"Visual_Floor_1 for {device.product_name} ({device.dsn}): type is {image_type}, saved to {out_path}")
-
-
                         # Parse and publish the floor map image
                         try:
-                            parsed_map = parse_floor_map_bytes(visual_floor_data)
+                            parsed_map = await visual_floor_map.parse_floor_map_bytes(visual_floor_data)
                             geometry = _map_geometry(parsed_map)
-                            # The .bin pose is static throughout a run;
-                            # prefer the live telemetry pose when the
+                            # Prefer the live telemetry pose when the
                             # device supports it.
                             pose = device.live_location or parsed_map.get("pose")
                             cached_geometry = floor_map_geometry.get(device.dsn)
@@ -275,8 +251,9 @@ async def poll_loop(
 
                             if geometry_changed or pose_changed:
                                 render_geometry = geometry if geometry_changed else cached_geometry
+                                png = await visual_floor_map.render_floor_map_pillow({**render_geometry, "pose": pose})
                                 await mqtt.publish_map_image(
-                                    device, {**render_geometry, "pose": pose},
+                                    device, png,
                                 )
                                 floor_map_geometry[device.dsn] = geometry
                                 floor_map_pose[device.dsn] = pose
@@ -304,16 +281,17 @@ async def poll_loop(
                 # poll on supported models, so publish whenever it moves
                 # even though the Visual_Floor_1 file itself is static.
                 live_pose = device.live_location
-                if live_pose and device.dsn in floor_map_geometry:
-                    if floor_map_pose.get(device.dsn) != live_pose:
-                        try:
-                            await mqtt.publish_map_image(
-                                device,
-                                {**floor_map_geometry[device.dsn], "pose": live_pose},
-                            )
-                            floor_map_pose[device.dsn] = live_pose
-                        except (TypeError, ValueError, OSError, TimeoutError, aiomqtt.MqttError) as e:
-                            logger.error(f"Failed to publish live pose for {device.product_name}: {e}")
+
+                if (live_pose and device.dsn in floor_map_geometry) and (floor_map_pose.get(device.dsn) != live_pose):
+                    png = await visual_floor_map.render_floor_map_pillow({**floor_map_geometry[device.dsn], "pose": live_pose})
+                    try:
+                        await mqtt.publish_map_image(
+                            device,
+                            png,
+                        )
+                        floor_map_pose[device.dsn] = live_pose
+                    except (TypeError, ValueError, OSError, TimeoutError, aiomqtt.MqttError) as e:
+                        logger.error(f"Failed to publish live pose for {device.product_name}: {e}")
 
                 if skegox_mard.rooms:
                     if first_poll:
@@ -413,6 +391,7 @@ async def run(config: Settings) -> None:
     """Main run loop."""
     auth = SharkAuth(config)
     mqtt = MqttClient(config)
+    visual_floor_map = VisualizeFloorMap()
 
     # --auth-once: authenticate, save tokens, exit
     if config.auth_once:
@@ -496,7 +475,7 @@ async def run(config: Settings) -> None:
             command_event = asyncio.Event()
 
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(poll_loop(api, ayla_api, mqtt, auth, config, devices_map, ayla_room_data, ayla_mard, command_event))
+                tg.create_task(poll_loop(api, ayla_api, mqtt, visual_floor_map, auth, config, devices_map, ayla_room_data, ayla_mard, command_event))
                 tg.create_task(mqtt.command_listener(router, devices_map, command_event))
 
                 async def _shutdown_watcher() -> None:

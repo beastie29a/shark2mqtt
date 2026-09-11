@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any, Self
 
 import aiomqtt
 
-from .visualize_floor_map import render_floor_map_pillow
-
 if TYPE_CHECKING:
     from .config import Settings
     from .shark_device import SharkVacuum
@@ -104,14 +102,8 @@ class MqttClient:
                 "set_fan_speed_topic": f"{self._prefix}/{dsn}/set_fan_speed",
                 "fan_speed_list": ["eco", "normal", "max"],
                 "supported_features": [
-                    "start",
-                    "stop",
-                    "pause",
-                    "return_home",
-                    "locate",
-                    "fan_speed",
-                    "status",
-                    "send_command",
+                    "start", "stop", "pause", "return_home",
+                    "locate", "fan_speed", "status", "send_command",
                 ],
                 "availability_topic": f"{self._prefix}/{dsn}/available",
                 "payload_available": "online",
@@ -449,9 +441,7 @@ class MqttClient:
             # Publish current clean mode state
             mode = self._clean_modes.get(dsn, "Normal")
             await self._publish(
-                f"{self._prefix}/{dsn}/clean_mode/state",
-                mode,
-                retain=True,
+                f"{self._prefix}/{dsn}/clean_mode/state", mode, retain=True,
             )
 
         # Remove stale room buttons that no longer exist
@@ -460,8 +450,7 @@ class MqttClient:
         for room_slug in stale_rooms:
             await self._publish(
                 f"{HA_DISCOVERY_PREFIX}/button/{uid}_clean_{room_slug}/config",
-                "",
-                retain=True,
+                "", retain=True,
             )
             logger.info("Removed stale room button %s for %s", room_slug, dsn)
         self._published_rooms[dsn] = current_room_slugs
@@ -472,9 +461,7 @@ class MqttClient:
     # --- State publishing ---
 
     async def publish_state(
-        self,
-        device: SharkVacuum,
-        prev_error: dict[str, int] | None = None,
+        self, device: SharkVacuum, prev_error: dict[str, int] | None = None,
     ) -> None:
         """Publish device state, attributes, and availability.
 
@@ -514,9 +501,7 @@ class MqttClient:
                 )
                 logger.warning(
                     "Error on %s: %s (code %d)",
-                    device.product_name,
-                    device.error_text,
-                    device.error_code,
+                    device.product_name, device.error_text, device.error_code,
                 )
 
     async def publish_unavailable(self, devices: list[SharkVacuum]) -> None:
@@ -531,18 +516,15 @@ class MqttClient:
     async def publish_map_image(
         self,
         device: SharkVacuum,
-        parsed_map: dict[str, Any],
-        dpi: int = 150,
+        png: bytes,
     ) -> None:
         """Publish floor map as a PNG image to Home Assistant.
 
         Args:
             device: The SharkVacuum device
-            parsed_map: Parsed floor map data from visualize_floor_map.parse_floor_map()
-            dpi: Image DPI (default 150)
+            png: Raw PNG bytes
         """
         dsn = device.dsn
-        png = render_floor_map_pillow(parsed_map, dpi=dpi)
 
         # Publish raw PNG bytes to image topic
         image_topic = f"{self._prefix}/{dsn}/map_image"

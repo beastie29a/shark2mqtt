@@ -1,10 +1,7 @@
-import pytest
-
 from src.main import _floor_file_updated_at
 
 
-@pytest.mark.asyncio
-async def test_floor_file_updated_at_reads_shadow_file_list():
+def test_floor_file_updated_at_reads_shadow_file_list():
     raw = {
         "shadow": {
             "properties": {
@@ -21,8 +18,7 @@ async def test_floor_file_updated_at_reads_shadow_file_list():
     }
     assert _floor_file_updated_at(raw) == "2026-09-08T04:25:36.000Z"
 
-@pytest.mark.asyncio
-async def test_floor_file_updated_at_missing_entries():
+def test_floor_file_updated_at_missing_entries():
     assert _floor_file_updated_at({}) == ""
     assert _floor_file_updated_at({"shadow": {}}) == ""
     assert _floor_file_updated_at(

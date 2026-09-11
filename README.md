@@ -73,7 +73,6 @@ volumes:
 | `MQTT_PREFIX` | No | `shark2mqtt` | MQTT topic prefix |
 | `POLL_INTERVAL` | No | `300` | Polling interval in seconds |
 | `POLL_INTERVAL_ACTIVE` | No | `20` | Polling interval while cleaning |
-| `MAP_ENABLE_LIVE_LOCATION` | No | `true` | Ask devices to upload live pose telemetry |
 | `TOKEN_DIR` | No | `/data` | Directory for persisted auth tokens |
 | `LOG_LEVEL` | No | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 
