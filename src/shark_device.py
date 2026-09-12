@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -9,10 +10,9 @@ from .const import (
     ERROR_CODES,
     OPERATING_MODE_TO_HA_STATE,
     POWER_MODE_NAMES,
-    OperatingMode,
-    PowerMode,
     PROP_GET_BATTERY_CAPACITY,
     PROP_GET_CHARGING_STATUS,
+    PROP_GET_CLEANING_PARAMETERS,
     PROP_GET_DEVICE_MODEL_NUMBER,
     PROP_GET_DOCK_ERROR_CODE,
     PROP_GET_DOCK_KNOB_STATUS,
@@ -23,6 +23,7 @@ from .const import (
     PROP_GET_EVACUATING,
     PROP_GET_EXTENDED_ERROR_CODE,
     PROP_GET_FLOW_MODE,
+    PROP_GET_MOP_PLATE_ATTACHED,
     PROP_GET_OPERATING_MODE,
     PROP_GET_POWER_MODE,
     PROP_GET_RECOMMEND_RANDR,
@@ -32,6 +33,8 @@ from .const import (
     PROP_GET_RUN_TIME_CUMULATIVE,
     PROP_GET_SCHEDULE,
     PROP_GET_WARNING_CODE,
+    OperatingMode,
+    PowerMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -312,13 +315,27 @@ class SharkVacuum:
 
     @property
     def has_flow_mode(self) -> bool:
-        """Whether this model has a mop tank with a water flow setting.
+        """Whether this model has a mop plate with a water flow setting.
 
-        Only vac+mop combo models carry Flow_Mode in their shadow. Both
-        backends land properties in `_properties` under the `GET_` name,
-        so this works for skegox and Ayla alike.
+        Flow_Mode alone is NOT a reliable signal — dry-only models
+        (e.g. AV251WAXUS) and wet/dry models (UR2850ZEUS) also report it.
+        MopPlateAttached is only present on models with a physical mop
+        plate, so it is the capability gate for the water flow level
+        select. Both backends land properties in `_properties` under the
+        `GET_` name, so this works for skegox and Ayla alike.
         """
-        return PROP_GET_FLOW_MODE in self._properties
+        return PROP_GET_MOP_PLATE_ATTACHED in self._properties
+
+    @property
+    def has_wet_dry(self) -> bool:
+        """Whether this model supports wet/dry/deep clean modes.
+
+        CleaningParameters (e.g. '{"Dry":1,"Wet":0,"Deep":0,"CleanStage":2}')
+        is only present on wet/dry-capable models such as the UR2850ZEUS
+        and RV2820YEUS. Its value is live clean state, not a capability
+        flag — only the property's PRESENCE is the signal.
+        """
+        return PROP_GET_CLEANING_PARAMETERS in self._properties
 
     @property
     def rssi(self) -> int:
@@ -385,6 +402,35 @@ class SharkVacuum:
         val = self._get_prop(PROP_GET_SCHEDULE)
         return val if isinstance(val, dict) and val else None
 
+    @property
+    def live_location(self) -> tuple[float, float, float] | None:
+        """Live robot pose as (x, y, theta) in meters/radians, or None.
+
+        Not all models support live location. On supported models the
+        skegox telemetry carries a `LiveLocation` entry that is a
+        JSON-encoded *string* (not a nested object) with `x_coord`,
+        `y_coord`, and `theta` keys. On unsupported models the key is
+        absent entirely (e.g. RV2500AX), so its absence is the
+        capability signal.
+        """
+        raw = self._properties.get("GET_LiveLocation")
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        try:
+            return (
+                float(data["x_coord"]),
+                float(data["y_coord"]),
+                float(data["theta"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
     # --- MQTT payloads ---
 
     def to_state_payload(self) -> dict[str, Any]:
@@ -417,8 +463,8 @@ class SharkVacuum:
             "replace_battery": self.replace_battery,
             "recommend_rest_and_recharge": self.recommend_rest_and_recharge,
         }
-        # Vac-only models have no mop tank, so reporting a water flow level
-        # for them would be inventing a setting the hardware doesn't have.
+        # Models without a mop plate (vac-only or wet/dry models whose
+        # Flow_Mode is unused) would get an invented water flow setting.
         if self.has_flow_mode:
             attrs["water_flow"] = self.water_flow
         if self.rooms:
