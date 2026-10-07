@@ -589,6 +589,113 @@ async def test_render_pillow_respects_show_flags(vm):
     assert np.array_equal(none, empty_img)
 
 
+@pytest.mark.asyncio
+async def test_render_pillow_hides_background_grid(vm):
+    parsed = _parsed()
+    parsed["zones"] = []
+    parsed["boundaries"] = []
+    parsed["pose"] = None
+    with_bg = np.asarray(
+        Image.open(io.BytesIO(await vm.render_floor_map_pillow(parsed))).convert("RGB")
+    )
+    no_bg = np.asarray(
+        Image.open(
+            io.BytesIO(await vm.render_floor_map_pillow(parsed, show_background=False))
+        ).convert("RGB")
+    )
+    assert not np.array_equal(with_bg, no_bg)
+    # Without the grid raster the base is plain white.
+    assert np.any(np.all(no_bg == (255, 255, 255), axis=-1))
+
+
+@pytest.mark.asyncio
+async def test_render_pillow_hides_robot(vm):
+    parsed = _parsed()
+    parsed["zones"] = []
+    parsed["boundaries"] = []
+    without = np.asarray(
+        Image.open(io.BytesIO(await vm.render_floor_map_pillow(parsed, show_robot=False))).convert("RGB")
+    )
+    robo = np.array(_rgb(SupportedColor.ROBO))
+    assert not np.any(np.all(without == robo, axis=-1))
+    # Default rendering still draws the sprite.
+    with_robot = np.asarray(
+        Image.open(io.BytesIO(await vm.render_floor_map_pillow(parsed))).convert("RGB")
+    )
+    assert np.any(np.all(with_robot == robo, axis=-1))
+    assert not np.array_equal(without, with_robot)
+
+
+@pytest.mark.asyncio
+async def test_render_pillow_hides_all_layers(vm):
+    parsed = _parsed()
+    img = np.asarray(
+        Image.open(
+            io.BytesIO(
+                await vm.render_floor_map_pillow(
+                    parsed,
+                    show_background=False,
+                    show_zones=False,
+                    show_boundaries=False,
+                    show_robot=False,
+                )
+            )
+        ).convert("RGB")
+    )
+    # No layers at all -> an entirely white image.
+    assert np.all(img == (255, 255, 255))
+
+
+@pytest.mark.asyncio
+async def test_render_pillow_show_flags_match_dataless_map(vm):
+    # Toggling every layer off must equal a map with no data at all and no
+    # background (same white base).
+    parsed = _parsed()
+    all_off = np.asarray(
+        Image.open(
+            io.BytesIO(
+                await vm.render_floor_map_pillow(
+                    parsed,
+                    show_background=False,
+                    show_zones=False,
+                    show_boundaries=False,
+                    show_robot=False,
+                )
+            )
+        ).convert("RGB")
+    )
+    empty = _parsed()
+    empty["zones"] = []
+    empty["boundaries"] = []
+    empty["pose"] = None
+    empty_off_bg = np.asarray(
+        Image.open(
+            io.BytesIO(
+                await vm.render_floor_map_pillow(empty, show_background=False)
+            )
+        ).convert("RGB")
+    )
+    assert np.array_equal(all_off, empty_off_bg)
+
+
+@pytest.mark.asyncio
+async def test_render_floor_map_hides_background_and_robot(vm, tmp_path):
+    out_bg = tmp_path / "no_bg.png"
+    out_robot = tmp_path / "no_robot.png"
+    out_full = tmp_path / "full.png"
+    await vm.render_floor_map(_parsed(), output_path=str(out_full), dpi=100)
+    await vm.render_floor_map(
+        _parsed(), output_path=str(out_bg), dpi=100, show_background=False
+    )
+    await vm.render_floor_map(
+        _parsed(), output_path=str(out_robot), dpi=100, show_robot=False
+    )
+    for p in (out_bg, out_robot, out_full):
+        assert p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert out_bg.read_bytes() != out_full.read_bytes()
+    assert out_robot.read_bytes() != out_full.read_bytes()
+
+
 
 def test_draw_robot_uses_draw_primitives(vm):
     from unittest.mock import MagicMock
