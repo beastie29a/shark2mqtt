@@ -479,11 +479,38 @@ class VisualizeFloorMap:
         raw = np.frombuffer(cells[: rows * cols], dtype=np.uint8)
         return self._CELL_LUT[raw.reshape(rows, cols)]
     
-    async def render_floor_map(self, parsed, output_path=None, dpi=150, show_zones=True, show_boundaries=True) -> None:
+    async def render_floor_map(
+        self,
+        parsed,
+        output_path=None,
+        dpi=150,
+        show_background=True,
+        show_zones=True,
+        show_boundaries=True,
+        show_robot=True,
+    ) -> None:
         """matplotlib renderer is synchronous, so run it in a thread to avoid blocking the event loop."""
-        await asyncio.to_thread(self._render_floor_map, parsed, output_path, dpi, show_zones, show_boundaries)
+        await asyncio.to_thread(
+            self._render_floor_map,
+            parsed,
+            output_path,
+            dpi,
+            show_background,
+            show_zones,
+            show_boundaries,
+            show_robot,
+        )
 
-    def _render_floor_map(self, parsed, output_path=None, dpi=150, show_zones=True, show_boundaries=True) -> None:
+    def _render_floor_map(
+        self,
+        parsed,
+        output_path=None,
+        dpi=150,
+        show_background=True,
+        show_zones=True,
+        show_boundaries=True,
+        show_robot=True,
+    ) -> None:
         """Render the full annotated floor plan."""
         grid = parsed["grid"]
         resolution = grid["resolution"]
@@ -514,15 +541,16 @@ class VisualizeFloorMap:
         fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height), dpi=dpi)
 
         # Render grid (flip vertically so y increases upward)
-        ax.imshow(
-            img[::-1],
-            cmap=cmap,
-            norm=norm,
-            extent=[x_min, x_max, y_min, y_max],
-            interpolation="nearest",
-            aspect="equal",
-            zorder=1,
-        )
+        if show_background:
+            ax.imshow(
+                img[::-1],
+                cmap=cmap,
+                norm=norm,
+                extent=[x_min, x_max, y_min, y_max],
+                interpolation="nearest",
+                aspect="equal",
+                zorder=1,
+            )
 
         # Zone overlays
         if show_zones and parsed["zones"]:
@@ -583,7 +611,7 @@ class VisualizeFloorMap:
                     ax.add_patch(polygon)
 
         # Robot pose
-        if parsed["pose"]:
+        if parsed["pose"] and show_robot:
             px, py, pz = parsed["pose"]
             ax.plot(px, py, "o", color="#1565C0", markersize=10, zorder=6)
             # Heading arrow (pz is yaw in radians)
@@ -637,7 +665,7 @@ class VisualizeFloorMap:
                 )
         if show_boundaries and parsed["boundaries"]:
             legend_patches.append(mpatches.Patch(facecolor="none", edgecolor="#D32F2F", label="Obstacle boundary"))
-        if parsed["pose"]:
+        if parsed["pose"] and show_robot:
             legend_patches.append(mpatches.Patch(color="#1565C0", label="Robot pose"))
 
         ax.legend(
@@ -672,15 +700,36 @@ class VisualizeFloorMap:
     # ---------------------------------------------------------------------------
 
     async def render_floor_map_pillow(
-        self, parsed, output=None, dpi=150, show_zones=True, show_boundaries=True
+        self,
+        parsed,
+        output=None,
+        dpi=150,
+        show_background=True,
+        show_zones=True,
+        show_boundaries=True,
+        show_robot=True,
     ) -> bytes:
         """PIL Library is synchronous, so run it in a thread to avoid blocking the event loop."""
         return await asyncio.to_thread(
-            self._render_floor_map_pillow, parsed, output, dpi, show_zones, show_boundaries
+            self._render_floor_map_pillow,
+            parsed,
+            output,
+            dpi,
+            show_background,
+            show_zones,
+            show_boundaries,
+            show_robot,
         )
 
     def _render_floor_map_pillow(
-        self, parsed, output=None, dpi=150, show_zones=True, show_boundaries=True
+        self,
+        parsed,
+        output=None,
+        dpi=150,
+        show_background=True,
+        show_zones=True,
+        show_boundaries=True,
+        show_robot=True,
     ) -> bytes:
         """Render the floor plan with Pillow using the Roborock blue/pastel palette.
 
@@ -722,9 +771,15 @@ class VisualizeFloorMap:
         rgb_lut = np.zeros((9, 3), dtype=np.uint8)
         for cat, col in cat_color.items():
             rgb_lut[cat] = col[:3]
-        cats = self.build_grid_image(grid)  # (rows, cols), one category per cell
-        rgb = rgb_lut[cats[::-1]]  # flip so world y (up) maps to the image top
-        base = Image.fromarray(rgb, "RGB").resize((img_w, img_h), Image.NEAREST)
+        if show_background:
+            cats = self.build_grid_image(grid)  # (rows, cols), one category per cell
+            rgb = rgb_lut[cats[::-1]]  # flip so world y (up) maps to the image top
+            base = Image.fromarray(rgb, "RGB").resize((img_w, img_h), Image.NEAREST)
+        else:
+            # No occupancy grid raster (roborock show_background=False): a
+            # plain white base so zone/obstacle outlines and the robot remain
+            # legible on their own.
+            base = Image.new("RGB", (img_w, img_h), (255, 255, 255))
 
         # Zone + obstacle overlays on a transparent layer.
         overlay = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
@@ -748,7 +803,7 @@ class VisualizeFloorMap:
 
         # Robot sprite (Roborock style), oriented by pose yaw.
         pose = parsed.get("pose")
-        if pose:
+        if pose and show_robot:
             px, py, pz = pose
             cx, cy = w2p(px, py)
             r = max(6, round(self._ROBOT_RADIUS_M * self._PX_PER_M))

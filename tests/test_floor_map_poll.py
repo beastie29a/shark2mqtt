@@ -80,6 +80,11 @@ class _Wired:
         self.config = MagicMock()
         self.config.poll_interval = 0.01
         self.config.poll_interval_active = 0.01
+        # Map display options (defaults mirror Settings: all on)
+        self.config.map_show_background = True
+        self.config.map_show_rooms = True
+        self.config.map_show_obstacles = True
+        self.config.map_show_robot = True
         self.event = asyncio.Event()
         self.fetched: list[str] = []
 
@@ -140,6 +145,26 @@ async def test_live_pose_preferred_over_file_pose():
     w.mqtt.publish_map_image.assert_awaited_once()
     rendered = w.vfm.render_floor_map_pillow.await_args.args[0]
     assert rendered["pose"] == (1.0, 2.0, 0.5)
+
+
+@pytest.mark.asyncio
+async def test_map_show_options_are_threaded_to_renderer():
+    """Settings MAP_SHOW_* values are forwarded to render_floor_map_pillow
+    on both the geometry and the live-pose publish paths."""
+    w = _Wired()
+    w.config.map_show_background = False
+    w.config.map_show_rooms = False
+    w.config.map_show_obstacles = True
+    w.config.map_show_robot = False
+    await w.run_polls([_raw_device(), _raw_device(live=(3.0, 4.0, 0.1))])
+
+    assert w.mqtt.publish_map_image.await_count == 2
+    for call in w.vfm.render_floor_map_pillow.await_args_list:
+        kwargs = call.kwargs
+        assert kwargs["show_background"] is False
+        assert kwargs["show_zones"] is False
+        assert kwargs["show_boundaries"] is True
+        assert kwargs["show_robot"] is False
 
 
 @pytest.mark.asyncio

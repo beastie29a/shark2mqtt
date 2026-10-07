@@ -251,7 +251,13 @@ async def poll_loop(
 
                             if geometry_changed or pose_changed:
                                 render_geometry = geometry if geometry_changed else cached_geometry
-                                png = await visual_floor_map.render_floor_map_pillow({**render_geometry, "pose": pose})
+                                png = await visual_floor_map.render_floor_map_pillow(
+                                    {**render_geometry, "pose": pose},
+                                    show_background=config.map_show_background,
+                                    show_zones=config.map_show_rooms,
+                                    show_boundaries=config.map_show_obstacles,
+                                    show_robot=config.map_show_robot,
+                                )
                                 await mqtt.publish_map_image(
                                     device, png,
                                 )
@@ -283,7 +289,13 @@ async def poll_loop(
                 live_pose = device.live_location
 
                 if (live_pose and device.dsn in floor_map_geometry) and (floor_map_pose.get(device.dsn) != live_pose):
-                    png = await visual_floor_map.render_floor_map_pillow({**floor_map_geometry[device.dsn], "pose": live_pose})
+                    png = await visual_floor_map.render_floor_map_pillow(
+                        {**floor_map_geometry[device.dsn], "pose": live_pose},
+                        show_background=config.map_show_background,
+                        show_zones=config.map_show_rooms,
+                        show_boundaries=config.map_show_obstacles,
+                        show_robot=config.map_show_robot,
+                    )
                     try:
                         await mqtt.publish_map_image(
                             device,

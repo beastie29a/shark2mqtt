@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Map image layer visibility (all default on = current rendering).
+    # Mirrors the roborock integration's map drawable options, limited to
+    # the layers Shark's Visual_Floor_1 .bin actually contains (there is no
+    # charger/dock geometry in the file).
+    map_show_background: bool = True
+    map_show_rooms: bool = True
+    map_show_obstacles: bool = True
+    map_show_robot: bool = True
+
     # Operation modes
     auth_once: bool = False
     offline: bool = False

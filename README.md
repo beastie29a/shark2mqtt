@@ -74,6 +74,10 @@ volumes:
 | `POLL_INTERVAL` | No | `300` | Polling interval in seconds |
 | `POLL_INTERVAL_ACTIVE` | No | `20` | Polling interval while cleaning |
 | `TOKEN_DIR` | No | `/data` | Directory for persisted auth tokens |
+| `MAP_SHOW_BACKGROUND` | No | `true` | Draw the occupancy grid raster in the map image |
+| `MAP_SHOW_ROOMS` | No | `true` | Draw zone (room) polygons and labels in the map image |
+| `MAP_SHOW_OBSTACLES` | No | `true` | Draw obstacle boundary outlines in the map image |
+| `MAP_SHOW_ROBOT` | No | `true` | Draw the robot pose sprite in the map image |
 | `LOG_LEVEL` | No | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 
 See [`config.example.env`](config.example.env) for a ready-to-edit template.
@@ -165,6 +169,26 @@ The map image is built from two sources:
   updates every poll on supported models. Not all models support live
   location (the field is simply absent from their telemetry); those fall
   back to the static pose embedded in `Visual_Floor_1`.
+
+### Map Display Options
+
+The map image layers can be toggled per deployment with the `MAP_SHOW_*`
+environment variables (all default to `true`, which reproduces the
+original rendering):
+
+| Variable | Layer |
+|---|---|
+| `MAP_SHOW_BACKGROUND` | Occupancy grid raster (floor/walls) |
+| `MAP_SHOW_ROOMS` | Room zone polygons and labels |
+| `MAP_SHOW_OBSTACLES` | Obstacle boundary outlines |
+| `MAP_SHOW_ROBOT` | Robot pose sprite |
+
+These mirror the roborock integration's map drawable options, limited to
+the layers Shark's `Visual_Floor_1` file actually contains. The file has
+no charger/dock geometry, so there is no charger drawable, and there is
+no cleaned-area or path data to toggle. With `MAP_SHOW_BACKGROUND=false`
+the grid raster is replaced by a plain white base so the remaining
+layers stay legible.
 
 ### Vacuum States
 
