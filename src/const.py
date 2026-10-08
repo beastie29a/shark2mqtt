@@ -5,7 +5,7 @@ from enum import IntEnum
 
 # Bridge version, used in the HA device-discovery origin block. Keep in sync
 # with the git tag on release.
-VERSION = "v1.7.2"
+VERSION = "v1.7.3"
 
 
 @dataclass(frozen=True)
