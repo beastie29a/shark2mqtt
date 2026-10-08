@@ -468,11 +468,13 @@ class TestDeviceDiscovery:
         assert origin["name"] == "shark2mqtt"
         assert origin["sw"]
         assert origin["su"]
-        assert payload["avty"] == {
-            "t": "shark2mqtt/DSN123/available",
-            "pl": "online",
-            "npl": "offline",
-        }
+        assert payload["avty"] == [
+            {
+                "t": "shark2mqtt/DSN123/available",
+                "pl_avail": "online",
+                "pl_not_avail": "offline",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_components_have_platform_and_unique_id(self, client):
