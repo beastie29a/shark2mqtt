@@ -364,11 +364,13 @@ class MqttClient:
                 "sw": VERSION,
                 "su": "https://github.com/CamSoper/shark2mqtt",
             },
-            "avty": {
-                "t": availability_topic,
-                "pl": "online",
-                "npl": "offline",
-            },
+            "avty": [
+                {
+                    "t": availability_topic,
+                    "pl_avail": "online",
+                    "pl_not_avail": "offline",
+                }
+            ],
             "cmps": cmps,
         }
 
