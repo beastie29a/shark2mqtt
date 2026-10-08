@@ -137,6 +137,14 @@ The reason is logged as of v1.5.5. An `invalid_grant` there means the saved toke
 
 If you hit this, please add what you find to [#38](https://github.com/CamSoper/shark2mqtt/issues/38), especially how long the block took to clear. How long the cooldown actually runs is still an open question.
 
+## Home Assistant MQTT Device Discovery
+
+As of v1.7.0, shark2mqtt publishes a single HA MQTT device-discovery payload per vacuum at `homeassistant/device/shark2mqtt_<DSN>/config` instead of sending ~20 individual legacy discovery configs. This requires Home Assistant 2025.5+.
+
+The bridge emits a one-time `{"migrate_discovery": true}` signal to each legacy discovery topic before publishing the device payload, so existing entities can migrate without duplicating or losing their identity. The device payload includes the required `dev` (device registry) and `o` (origin) blocks, plus a `cmps` map with one entry per entity.
+
+If you already have shark2mqtt entities in Home Assistant, upgrade HA first, then restart shark2mqtt once. After the migration is confirmed in HA logs, remove the stale single-component retained configs from the legacy discovery topics by publishing an empty retained message to each of the old topics. A rollback is the reverse: publish `{"migrate_discovery": true}` to the device topic and restore the legacy discovery payloads.
+
 ## Home Assistant Entities
 
 Each vacuum is automatically discovered by Home Assistant with the following entities:

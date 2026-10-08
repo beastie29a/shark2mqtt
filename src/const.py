@@ -3,6 +3,10 @@
 from dataclasses import dataclass
 from enum import IntEnum
 
+# Bridge version, used in the HA device-discovery origin block. Keep in sync
+# with the git tag on release.
+VERSION = "1.7.0"
+
 
 @dataclass(frozen=True)
 class RegionConfig:

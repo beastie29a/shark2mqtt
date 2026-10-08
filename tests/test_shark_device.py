@@ -59,6 +59,16 @@ def make_wet_dry_vacuum(
     return SharkVacuum.from_skegox(data)
 
 
+def device_discovery_payload(client: MqttClient) -> dict:
+    """Return the most recent homeassistant/device/{uid}/config payload."""
+    for call in reversed(client._publish.call_args_list):
+        topic = call.args[0]
+        if topic.startswith("homeassistant/device/") and topic.endswith("/config"):
+            assert isinstance(call.args[1], dict)
+            return call.args[1]
+    raise AssertionError("no device discovery payload was published")
+
+
 class TestLiveLocation:
     def test_parses_json_string_pose(self):
         # LiveLocation is a JSON-encoded string, not a nested object.
@@ -240,28 +250,23 @@ class TestWetDryCapability:
         assert "water_flow" in vac.to_attributes_payload()
 
     @pytest.mark.asyncio
-    async def test_discovery_retracts_select_for_vac_only(self, mock_config):
-        # Not publishing isn't enough — discovery configs are retained, so a
-        # config published by an earlier version would linger in HA. The
-        # empty payload is autodiscovery's delete.
+    async def test_discovery_omits_select_for_vac_only(self, mock_config):
+        # Under device discovery, retraction is omission: the component is
+        # simply absent from the single retained payload, so no empty
+        # payload publish exists (or is needed).
         client = MqttClient(mock_config)
         client._publish = AsyncMock()
         await client.publish_discovery(make_vacuum())
-        water_flow = [
-            c for c in client._publish.call_args_list
-            if "_water_flow/config" in c.args[0]
-        ]
-        assert len(water_flow) == 1
-        assert water_flow[0].args[1] == ""
-        assert water_flow[0].kwargs["retain"] is True
+        payload = device_discovery_payload(client)
+        assert "water_flow" not in payload["cmps"]
 
     @pytest.mark.asyncio
     async def test_discovery_publishes_select_for_mop_models(self, mock_config):
         client = MqttClient(mock_config)
         client._publish = AsyncMock()
         await client.publish_discovery(make_mop_vacuum(flow_mode=1))
-        topics = [c.args[0] for c in client._publish.call_args_list]
-        assert any("_water_flow/config" in t for t in topics)
+        payload = device_discovery_payload(client)
+        assert payload["cmps"]["water_flow"]["p"] == "select"
 
 
 class TestWaterFlowOverrideWhileDocked:
@@ -341,6 +346,13 @@ class TestDiscoveryDedup:
         vac.rooms = ["Kitchen"]
         await client.publish_discovery(vac)
         assert client._publish.call_count > first_count
+        # The republished payload carries the new room button and, because
+        # the old room is absent from cmps, no separate retract publish.
+        payload = device_discovery_payload(client)
+        assert "clean_kitchen" in payload["cmps"]
+        assert all(
+            c.args[1] != "" for c in client._publish.call_args_list
+        )
 
 
 class TestWetDryDiscovery:
@@ -354,17 +366,10 @@ class TestWetDryDiscovery:
         return client
 
     def _clean_mode_config(self, client):
-        for call in client._publish.call_args_list:
-            if "_clean_mode/config" in call.args[0]:
-                return call.args[1]
-        return None
+        return device_discovery_payload(client)["cmps"].get("clean_mode")
 
     def _deep_button_config(self, client):
-        for call in client._publish.call_args_list:
-            topic = call.args[0]
-            if "/button/" in topic and topic.endswith("_deep/config"):
-                return call.args[1]
-        return None
+        return device_discovery_payload(client)["cmps"].get("deep")
 
     @pytest.mark.asyncio
     async def test_wet_dry_device_gets_wet_dry_select(self, client):
@@ -404,12 +409,11 @@ class TestWetDryDiscovery:
 
     @pytest.mark.asyncio
     async def test_deep_button_retracted_for_dry_only_devices(self, client):
+        # Retraction under device discovery = omission from cmps.
         vac = make_vacuum()
         vac.rooms = ["Kitchen"]
         await client.publish_discovery(vac)
-        config = self._deep_button_config(client)
-        assert config is not None
-        assert config == ""
+        assert self._deep_button_config(client) is None
 
     @pytest.mark.asyncio
     async def test_stale_matrix_mode_falls_back_to_dry(self, client):
@@ -422,3 +426,118 @@ class TestWetDryDiscovery:
             if c.args[0].endswith("/clean_mode/state")
         ]
         assert states and states[-1][1] == "Dry"
+
+
+class TestDeviceDiscovery:
+    """Shape and semantics of the single-payload device discovery format."""
+
+    @pytest.fixture
+    def client(self, mock_config):
+        client = MqttClient(mock_config)
+        client._publish = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_single_retained_device_payload(self, client):
+        vac = make_wet_dry_vacuum()
+        vac.rooms = ["Kitchen", "Bedroom"]
+        await client.publish_discovery(vac)
+        topic = "homeassistant/device/shark2mqtt_DSN123/config"
+        device_calls = [
+            c for c in client._publish.call_args_list if c.args[0] == topic
+        ]
+        assert len(device_calls) == 1
+        assert device_calls[0].kwargs["retain"] is True
+        # No legacy per-component discovery configs — the only publishes on
+        # legacy config topics are the one-time migrate_discovery signals.
+        assert not any(
+            c.args[0].startswith("homeassistant/")
+            and c.args[0] != topic
+            and c.args[0].endswith("/config")
+            and c.args[1] != {"migrate_discovery": True}
+            for c in client._publish.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_payload_root_blocks(self, client):
+        vac = make_mop_vacuum()
+        await client.publish_discovery(vac)
+        payload = device_discovery_payload(client)
+        assert payload["dev"] == vac.device_info
+        origin = payload["o"]
+        assert origin["name"] == "shark2mqtt"
+        assert origin["sw"]
+        assert origin["su"]
+        assert payload["av"] == {
+            "t": "shark2mqtt/DSN123/available",
+            "pl": "online",
+            "npl": "offline",
+        }
+
+    @pytest.mark.asyncio
+    async def test_components_have_platform_and_unique_id(self, client):
+        # wet/dry model: full component set including water_flow and deep
+        vac = make_wet_dry_vacuum()
+        vac.rooms = ["Kitchen"]
+        await client.publish_discovery(vac)
+        payload = device_discovery_payload(client)
+        expected = {
+            "vacuum", "water_flow", "battery", "rssi", "charging", "error",
+            "error_text", "evacuating", "warning", "dock_error", "runtime",
+            "replace_battery", "recommend_randr", "error_trigger", "map",
+            "clean_kitchen", "clean_mode", "deep",
+        }
+        assert set(payload["cmps"]) == expected
+        for name, cfg in payload["cmps"].items():
+            assert cfg["p"], f"{name} missing platform"
+            assert cfg["unique_id"], f"{name} missing unique_id"
+        # Availability is root-level; no component carries it
+        for name, cfg in payload["cmps"].items():
+            assert "availability_topic" not in cfg, name
+            assert "device" not in cfg, name
+
+    @pytest.mark.asyncio
+    async def test_error_trigger_has_unique_id(self, client):
+        vac = make_vacuum()
+        await client.publish_discovery(vac)
+        payload = device_discovery_payload(client)
+        trigger = payload["cmps"]["error_trigger"]
+        assert trigger["p"] == "device_automation"
+        assert trigger["unique_id"] == "shark2mqtt_DSN123_error_trigger"
+        assert trigger["topic"] == "shark2mqtt/DSN123/error_event"
+
+    @pytest.mark.asyncio
+    async def test_migration_signal_once_per_device(self, client):
+        vac = make_mop_vacuum()
+        vac.rooms = ["Kitchen"]
+        await client.publish_discovery(vac)
+        signals = [
+            c for c in client._publish.call_args_list
+            if isinstance(c.args[1], dict) and c.args[1] == {"migrate_discovery": True}
+        ]
+        # One unretained signal per legacy topic this device used
+        assert len(signals) == len(client._legacy_config_topics(vac, "shark2mqtt_DSN123"))
+        assert all(c.kwargs.get("retain") is not True for c in signals)
+        first_count = client._publish.call_count
+
+        # Second call (changed rooms) must NOT re-emit the signal
+        vac.rooms = ["Kitchen", "Patio"]
+        await client.publish_discovery(vac)
+        later = client._publish.call_args_list[first_count:]
+        assert not any(
+            isinstance(c.args[1], dict) and c.args[1] == {"migrate_discovery": True}
+            for c in later
+        )
+
+    @pytest.mark.asyncio
+    async def test_remove_discovery_clears_device_topic(self, client):
+        vac = make_vacuum()
+        await client.publish_discovery(vac)
+        await client.remove_discovery(vac)
+        topic = "homeassistant/device/shark2mqtt_DSN123/config"
+        last = client._publish.call_args_list[-1]
+        assert last.args[0] == topic
+        assert last.args[1] == ""
+        assert last.kwargs["retain"] is True
+        # Dedup state cleared so a re-appearing device republishes
+        assert vac.dsn not in client._discovery_sigs
