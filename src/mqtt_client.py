@@ -362,7 +362,7 @@ class MqttClient:
             "o": {
                 "name": "shark2mqtt",
                 "sw": VERSION,
-                "su": "https://github.com/CamSoper/shark2mqtt",
+                "url": "https://github.com/CamSoper/shark2mqtt",
             },
             "avty": [
                 {

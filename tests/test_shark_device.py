@@ -467,7 +467,7 @@ class TestDeviceDiscovery:
         origin = payload["o"]
         assert origin["name"] == "shark2mqtt"
         assert origin["sw"]
-        assert origin["su"]
+        assert origin["url"] == "https://github.com/CamSoper/shark2mqtt"
         assert payload["avty"] == [
             {
                 "t": "shark2mqtt/DSN123/available",
