@@ -9,7 +9,7 @@ Standalone Python service bridging SharkNinja robot vacuums to Home Assistant vi
 1. **Auth**: Patchright (undetected Playwright fork) launches **headed** Chromium via `xvfb-run` to log into Auth0. Cloudflare Turnstile auto-passes in headed mode (blocks headless). CDP `Network.requestWillBeSent` captures the custom-scheme redirect. Tokens persisted to disk.
 2. **Device API**: REST calls to `stakra.slatra.thor.skegox.com`. Bearer token + API key. Request signatures are required headers but **NOT validated** server-side — random hex strings are accepted.
 3. **Room data**: Preferred from skegox shadow `Robot_Room_List` (format: `FloorID:Room1:Room2:...`), falls back to Ayla `GET_Robot_Room_List` for devices whose skegox room list is empty (rooms configured before skegox migration). Skegox data is checked each poll cycle; Ayla data is fetched once at startup.
-4. **MQTT**: HA autodiscovery for vacuum, battery, RSSI, charging, and error entities. Commands via `vacuum.send_command`.
+4. **MQTT**: HA autodiscovery uses the HA device-discovery format (HA 2025.5+) with a single retained payload per device at `homeassistant/device/shark2mqtt_<DSN>/config`. The bridge sends one-time `{"migrate_discovery": true}` signals to each legacy discovery topic before publishing the device payload, then cleans up legacy retained configs manually once HA confirms the migration. Commands via `vacuum.send_command`.
 
 ## Non-Obvious Implementation Details
 

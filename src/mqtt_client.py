@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Self
 
 import aiomqtt
 
+from .const import VERSION
+
 if TYPE_CHECKING:
     from .config import Settings
     from .shark_device import SharkVacuum
@@ -19,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 # HA discovery prefix (standard)
 HA_DISCOVERY_PREFIX = "homeassistant"
+
+# Use HA device discovery (one retained payload per device at
+# homeassistant/device/{uid}/config) instead of the legacy per-component
+# config topics. Flip to False to roll back to the legacy path; the legacy
+# implementation is kept as _publish_discovery_legacy for that purpose.
+USE_DEVICE_DISCOVERY = True
 
 
 class MqttClient:
@@ -35,6 +43,7 @@ class MqttClient:
         self._water_flow_overrides: dict[str, str] = {}  # device_id -> user-set flow level
         self._published_rooms: dict[str, set[str]] = {}  # device_id -> room slugs
         self._discovery_sigs: dict[str, str] = {}  # device_id -> last published signature
+        self._migrated: set[str] = set()  # device_ids that got the one-time migrate_discovery signal
 
     async def __aenter__(self) -> Self:
         will = aiomqtt.Will(
@@ -70,7 +79,348 @@ class MqttClient:
     # --- HA Autodiscovery ---
 
     async def publish_discovery(self, device: SharkVacuum) -> None:
-        """Publish HA MQTT autodiscovery configs for a vacuum and its sensors."""
+        """Publish HA discovery for a vacuum and its sensors.
+
+        Device discovery (HA 2025.5+): one retained payload per device at
+        homeassistant/device/{uid}/config carrying dev/origin/availability
+        plus every component under "cmps". Before the first device payload
+        is published, a one-time {"migrate_discovery": true} (unretained)
+        is sent to each legacy config topic so HA moves existing entities
+        over instead of creating duplicates.
+        """
+        if not USE_DEVICE_DISCOVERY:
+            await self._publish_discovery_legacy(device)
+            return
+
+        dsn = device.dsn
+        uid = f"shark2mqtt_{dsn}"
+        slug = re.sub(r"[^a-z0-9]+", "_", device.product_name.lower()).strip("_")
+        topic = f"{self._prefix}/{dsn}"
+
+        # Same signature-based dedup as the legacy path: discovery payloads
+        # are retained, so republish every poll cycle is pure noise (#29).
+        sig = json.dumps(
+            {
+                "device": device.device_info,
+                "rooms": device.rooms,
+                "has_flow_mode": device.has_flow_mode,
+                "has_wet_dry": device.has_wet_dry,
+            },
+            sort_keys=True,
+        )
+        if self._discovery_sigs.get(dsn) == sig:
+            logger.debug("Discovery unchanged for %s (%s), skipping", device.product_name, dsn)
+            return
+
+        # One-time migration signal: tell HA to move the existing
+        # single-component entities to device discovery. Must precede the
+        # device payload and must not be retained — HA treats it as an
+        # event, not a config.
+        if dsn not in self._migrated:
+            for legacy_topic in self._legacy_config_topics(device, uid):
+                await self._publish(legacy_topic, {"migrate_discovery": True})
+            self._migrated.add(dsn)
+            logger.info("Signaled HA to migrate %s to device discovery", dsn)
+
+        payload = self._build_device_discovery_payload(device, uid, slug, topic)
+        await self._publish(f"{HA_DISCOVERY_PREFIX}/device/{uid}/config", payload, retain=True)
+
+        # Clean mode state publish (unchanged from the legacy path)
+        if device.rooms:
+            if device.has_wet_dry:
+                options = ["Wet", "Dry"]
+                default_mode = "Dry"
+            else:
+                options = ["Normal", "Matrix"]
+                default_mode = "Normal"
+            mode = self._clean_modes.get(dsn, default_mode)
+            if mode not in options:
+                mode = default_mode
+            await self._publish(f"{topic}/clean_mode/state", mode, retain=True)
+
+        # Stale room buttons no longer need empty-payload retracts — they
+        # are simply absent from the republished payload. Keep the diff for
+        # log visibility.
+        current_room_slugs = {
+            re.sub(r"[^a-z0-9]+", "_", room.lower()).strip("_")
+            for room in (device.rooms or [])
+        }
+        prev_rooms = self._published_rooms.get(dsn, set())
+        for room_slug in prev_rooms - current_room_slugs:
+            logger.info("Removed stale room button %s for %s", room_slug, dsn)
+        self._published_rooms[dsn] = current_room_slugs
+        self._discovery_sigs[dsn] = sig
+
+        logger.info("Published HA device discovery for %s (%s)", device.product_name, dsn)
+
+    def _build_device_discovery_payload(
+        self, device: SharkVacuum, uid: str, slug: str, topic: str,
+    ) -> dict[str, Any]:
+        """Build the single retained device-discovery payload for a device."""
+        attrs_topic = f"{topic}/attributes"
+        availability_topic = f"{topic}/available"
+
+        def sensor(
+            name: str, key: str, template: str,
+            unit: str | None = None,
+            device_class: str | None = None,
+            state_class: str | None = None,
+            icon: str | None = None,
+            entity_category: str | None = None,
+        ) -> dict[str, Any]:
+            cfg: dict[str, Any] = {
+                "p": "sensor",
+                "unique_id": f"{uid}_{key}",
+                "name": name,
+                "object_id": f"{slug}_{key}",
+                "state_topic": attrs_topic,
+                "value_template": template,
+            }
+            if unit is not None:
+                cfg["unit_of_measurement"] = unit
+            if device_class is not None:
+                cfg["device_class"] = device_class
+            if state_class is not None:
+                cfg["state_class"] = state_class
+            if icon is not None:
+                cfg["icon"] = icon
+            if entity_category is not None:
+                cfg["entity_category"] = entity_category
+            return cfg
+
+        def binary_sensor(
+            name: str, key: str, template: str,
+            device_class: str | None = None,
+            entity_category: str | None = None,
+        ) -> dict[str, Any]:
+            cfg: dict[str, Any] = {
+                "p": "binary_sensor",
+                "unique_id": f"{uid}_{key}",
+                "name": name,
+                "object_id": f"{slug}_{key}",
+                "state_topic": attrs_topic,
+                "value_template": template,
+                "payload_on": True,
+                "payload_off": False,
+            }
+            if device_class is not None:
+                cfg["device_class"] = device_class
+            if entity_category is not None:
+                cfg["entity_category"] = entity_category
+            return cfg
+
+        def button(
+            name: str, key: str, command_topic: str,
+            payload_press: Any, icon: str,
+        ) -> dict[str, Any]:
+            return {
+                "p": "button",
+                "unique_id": f"{uid}_{key}",
+                "name": name,
+                "object_id": f"{slug}_{key}",
+                "command_topic": command_topic,
+                "payload_press": payload_press,
+                "icon": icon,
+            }
+
+        cmps: dict[str, dict[str, Any]] = {
+            "vacuum": {
+                "p": "vacuum",
+                "unique_id": uid,
+                "name": None,
+                "object_id": slug,
+                "state_topic": f"{topic}/state",
+                "json_attributes_topic": attrs_topic,
+                "command_topic": f"{topic}/command",
+                "send_command_topic": f"{topic}/send_command",
+                "set_fan_speed_topic": f"{topic}/set_fan_speed",
+                "fan_speed_list": ["eco", "normal", "max"],
+                "supported_features": [
+                    "start", "stop", "pause", "return_home",
+                    "locate", "fan_speed", "status", "send_command",
+                ],
+                "value_template": "{{ value_json.state }}",
+            },
+        }
+
+        # Water flow select — only for models with a mop tank; omitting it
+        # from cmps is the retraction under device discovery.
+        if device.has_flow_mode:
+            cmps["water_flow"] = {
+                "p": "select",
+                "unique_id": f"{uid}_water_flow",
+                "name": "Water Flow Level",
+                "object_id": f"{slug}_water_flow",
+                "command_topic": f"{topic}/set_water_flow",
+                "state_topic": attrs_topic,
+                "value_template": "{{ value_json.water_flow }}",
+                "options": ["eco", "normal", "max"],
+                "icon": "mdi:water-percent",
+            }
+
+        cmps["battery"] = sensor(
+            "Battery", "battery", "{{ value_json.battery_level }}",
+            unit="%", device_class="battery", state_class="measurement",
+        )
+        cmps["rssi"] = sensor(
+            "WiFi Signal", "rssi", "{{ value_json.rssi }}",
+            unit="dBm", device_class="signal_strength", state_class="measurement",
+            entity_category="diagnostic",
+        )
+        cmps["charging"] = binary_sensor(
+            "Charging", "charging", "{{ value_json.is_charging }}",
+            device_class="battery_charging",
+        )
+        cmps["error"] = binary_sensor(
+            "Error", "error", "{{ value_json.error_code != 0 }}",
+            device_class="problem",
+        )
+        cmps["error_text"] = sensor(
+            "Error Status", "error_text", "{{ value_json.error_text }}",
+            icon="mdi:alert-circle-outline", entity_category="diagnostic",
+        )
+        cmps["evacuating"] = binary_sensor(
+            "Emptying Bin", "evacuating", "{{ value_json.is_evacuating }}",
+            device_class="running",
+        )
+        cmps["warning"] = binary_sensor(
+            "Warning", "warning", "{{ value_json.warning_code != 0 }}",
+            device_class="problem", entity_category="diagnostic",
+        )
+        cmps["dock_error"] = sensor(
+            "Dock Error Code", "dock_error", "{{ value_json.dock_error_code }}",
+            icon="mdi:home-alert-outline", entity_category="diagnostic",
+        )
+        cmps["runtime"] = sensor(
+            "Total Runtime", "runtime", "{{ value_json.run_time_cumulative }}",
+            icon="mdi:history", entity_category="diagnostic",
+        )
+        cmps["replace_battery"] = binary_sensor(
+            "Replace Battery", "replace_battery", "{{ value_json.replace_battery }}",
+            device_class="problem", entity_category="diagnostic",
+        )
+        cmps["recommend_randr"] = binary_sensor(
+            "Recommend Rest And Recharge", "recommend_randr",
+            "{{ value_json.recommend_rest_and_recharge }}",
+            device_class="problem", entity_category="diagnostic",
+        )
+
+        # unique_id is required here: it was missing from the legacy
+        # single-component config and HA's migration refuses entities
+        # without one.
+        cmps["error_trigger"] = {
+            "p": "device_automation",
+            "unique_id": f"{uid}_error_trigger",
+            "automation_type": "trigger",
+            "type": "action",
+            "subtype": "error",
+            "topic": f"{topic}/error_event",
+        }
+
+        cmps["map"] = {
+            "p": "image",
+            "unique_id": f"{uid}_map",
+            "name": "Map",
+            "object_id": f"{slug}_map",
+            "image_topic": f"{topic}/map_image",
+            "content_type": "image/png",
+        }
+
+        for room in device.rooms or []:
+            room_slug = re.sub(r"[^a-z0-9]+", "_", room.lower()).strip("_")
+            cmps[f"clean_{room_slug}"] = button(
+                f"Clean {room}", f"clean_{room_slug}",
+                f"{topic}/clean_room",
+                json.dumps({"room": room}),
+                "mdi:robot-vacuum",
+            )
+
+        if device.rooms:
+            if device.has_wet_dry:
+                options = ["Wet", "Dry"]
+            else:
+                options = ["Normal", "Matrix"]
+            cmps["clean_mode"] = {
+                "p": "select",
+                "unique_id": f"{uid}_clean_mode",
+                "name": "Clean Mode",
+                "object_id": f"{slug}_clean_mode",
+                "command_topic": f"{topic}/clean_mode",
+                "state_topic": f"{topic}/clean_mode/state",
+                "options": options,
+                "icon": "mdi:broom",
+            }
+            # Deep button (wet/dry models only) — omitted otherwise.
+            if device.has_wet_dry:
+                cmps["deep"] = button(
+                    "Deep", "deep", f"{topic}/send_command",
+                    "vacuum_and_mop", "mdi:water-pump",
+                )
+
+        return {
+            "dev": device.device_info,
+            "o": {
+                "name": "shark2mqtt",
+                "sw": VERSION,
+                "su": "https://github.com/CamSoper/shark2mqtt",
+            },
+            "av": {
+                "t": availability_topic,
+                "pl": "online",
+                "npl": "offline",
+            },
+            "cmps": cmps,
+        }
+
+    def _legacy_config_topics(self, device: SharkVacuum, uid: str) -> list[str]:
+        """Legacy single-component config topics for the migrate_discovery signal.
+
+        Mirrors the topics _publish_discovery_legacy uses, so the signal
+        reaches every entity HA currently knows about for this device.
+        """
+        prefix = f"{HA_DISCOVERY_PREFIX}/"
+        topics = [
+            f"{prefix}vacuum/{uid}/config",
+            f"{prefix}sensor/{uid}_battery/config",
+            f"{prefix}sensor/{uid}_rssi/config",
+            f"{prefix}binary_sensor/{uid}_charging/config",
+            f"{prefix}binary_sensor/{uid}_error/config",
+            f"{prefix}sensor/{uid}_error_text/config",
+            f"{prefix}binary_sensor/{uid}_evacuating/config",
+            f"{prefix}binary_sensor/{uid}_warning/config",
+            f"{prefix}sensor/{uid}_dock_error/config",
+            f"{prefix}sensor/{uid}_runtime/config",
+            f"{prefix}binary_sensor/{uid}_replace_battery/config",
+            f"{prefix}binary_sensor/{uid}_recommend_randr/config",
+            f"{prefix}device_automation/{uid}_error_trigger/config",
+            f"{prefix}image/{uid}_map/config",
+        ]
+        if device.has_flow_mode:
+            topics.append(f"{prefix}select/{uid}_water_flow/config")
+        if device.rooms:
+            for room in device.rooms:
+                room_slug = re.sub(r"[^a-z0-9]+", "_", room.lower()).strip("_")
+                topics.append(f"{prefix}button/{uid}_clean_{room_slug}/config")
+            topics.append(f"{prefix}select/{uid}_clean_mode/config")
+            if device.has_wet_dry:
+                topics.append(f"{prefix}button/{uid}_deep/config")
+        return topics
+
+    async def remove_discovery(self, device: SharkVacuum) -> None:
+        """Remove a device and all its entities (empty retained payload).
+
+        Device discovery has no per-entity retract — clearing the single
+        device config topic removes everything. Wire into the device
+        removal path in main.py when one is added.
+        """
+        uid = f"shark2mqtt_{device.dsn}"
+        await self._publish(f"{HA_DISCOVERY_PREFIX}/device/{uid}/config", "", retain=True)
+        self._discovery_sigs.pop(device.dsn, None)
+        self._published_rooms.pop(device.dsn, None)
+        self._migrated.discard(device.dsn)
+
+    async def _publish_discovery_legacy(self, device: SharkVacuum) -> None:
+        """Legacy per-component autodiscovery (kept for one-flag rollback)."""
         dsn = device.dsn
         uid = f"shark2mqtt_{dsn}"
         slug = re.sub(r"[^a-z0-9]+", "_", device.product_name.lower()).strip("_")
