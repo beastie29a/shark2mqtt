@@ -34,6 +34,7 @@ async def _run_listener_with_messages(
     devices: dict[str, Any],
     command_event: asyncio.Event | None = None,
     handler: Any | None = None,
+    token_dir: str = "/data",
 ) -> MqttClient:
     """Set up a MqttClient with fake messages and run command_listener."""
     if handler is None:
@@ -45,6 +46,7 @@ async def _run_listener_with_messages(
     config.mqtt_port = 1883
     config.mqtt_username = None
     config.mqtt_password = None
+    config.token_dir = token_dir
 
     mqtt = MqttClient(config)
 
@@ -247,6 +249,70 @@ async def test_clean_mode_updates_state():
     mqtt = await _run_listener_with_messages(messages, devices)
 
     assert mqtt._clean_modes[dsn] == "Matrix"
+
+
+@pytest.mark.asyncio
+async def test_map_preference_command_persists_per_device_and_sets_event(tmp_path):
+    first_dsn = "DSN123"
+    second_dsn = "DSN456"
+    devices = {
+        dsn: SharkVacuum.from_skegox(make_skegox_device(dsn=dsn))
+        for dsn in (first_dsn, second_dsn)
+    }
+    command_event = asyncio.Event()
+    messages = [
+        FakeMessage(
+            f"shark2mqtt/{first_dsn}/map_options/background/set",
+            "OFF",
+        )
+    ]
+
+    mqtt = await _run_listener_with_messages(
+        messages,
+        devices,
+        command_event,
+        token_dir=str(tmp_path),
+    )
+
+    assert mqtt.map_preferences(first_dsn)["background"] is False
+    assert mqtt.map_preferences(second_dsn)["background"] is True
+    assert command_event.is_set()
+    assert mqtt.consume_map_preferences_changed()
+    assert not mqtt.consume_map_preferences_changed()
+    assert (tmp_path / "map_preferences.json").exists()
+    mqtt._client.publish.assert_any_await(
+        f"shark2mqtt/{first_dsn}/map_options/background/state",
+        "OFF",
+        qos=1,
+        retain=True,
+    )
+    mqtt._client.subscribe.assert_any_await(
+        "shark2mqtt/+/map_options/+/set"
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_map_preference_command_is_ignored(tmp_path):
+    dsn = "DSN123"
+    device = SharkVacuum.from_skegox(make_skegox_device(dsn=dsn))
+    command_event = asyncio.Event()
+    messages = [
+        FakeMessage(
+            f"shark2mqtt/{dsn}/map_options/background/set",
+            "maybe",
+        )
+    ]
+
+    mqtt = await _run_listener_with_messages(
+        messages,
+        {dsn: device},
+        command_event,
+        token_dir=str(tmp_path),
+    )
+
+    assert mqtt.map_preferences(dsn)["background"] is True
+    assert not command_event.is_set()
+    assert not (tmp_path / "map_preferences.json").exists()
 
 
 # --- Wet/dry models (CleaningParameters present) ---

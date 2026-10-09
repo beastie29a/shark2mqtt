@@ -85,6 +85,15 @@ class _Wired:
         self.config.map_show_rooms = True
         self.config.map_show_obstacles = True
         self.config.map_show_robot = True
+        self.mqtt.map_preferences = MagicMock(
+            side_effect=lambda _dsn: {
+                "background": self.config.map_show_background,
+                "rooms": self.config.map_show_rooms,
+                "obstacles": self.config.map_show_obstacles,
+                "robot": self.config.map_show_robot,
+            }
+        )
+        self.mqtt.consume_map_preferences_changed = MagicMock(return_value=False)
         self.event = asyncio.Event()
         self.fetched: list[str] = []
 
@@ -165,6 +174,28 @@ async def test_map_show_options_are_threaded_to_renderer():
         assert kwargs["show_zones"] is False
         assert kwargs["show_boundaries"] is True
         assert kwargs["show_robot"] is False
+
+
+@pytest.mark.asyncio
+async def test_map_preference_change_rerenders_cached_geometry():
+    """A layer toggle rerenders without a map or pose update."""
+    w = _Wired()
+    defaults = {
+        "background": True,
+        "rooms": True,
+        "obstacles": True,
+        "robot": True,
+    }
+    updated = {**defaults, "background": False}
+    w.mqtt.map_preferences = MagicMock(side_effect=[defaults, updated])
+
+    await w.run_polls([_raw_device(), _raw_device()])
+
+    assert w.fetched.count("Visual_Floor_1") == 1
+    assert w.mqtt.publish_map_image.await_count == 2
+    assert w.vfm.render_floor_map_pillow.await_args_list[1].kwargs[
+        "show_background"
+    ] is False
 
 
 @pytest.mark.asyncio

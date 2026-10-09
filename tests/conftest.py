@@ -51,6 +51,15 @@ def mock_mqtt():
     mqtt = AsyncMock()
     mqtt.publish_discovery.return_value = None
     mqtt.publish_state.return_value = None
+    mqtt.map_preferences = MagicMock(
+        return_value={
+            "background": True,
+            "rooms": True,
+            "obstacles": True,
+            "robot": True,
+        }
+    )
+    mqtt.consume_map_preferences_changed = MagicMock(return_value=False)
     return mqtt
 
 @pytest.fixture

@@ -82,6 +82,8 @@ volumes:
 
 See [`config.example.env`](config.example.env) for a ready-to-edit template.
 
+Each vacuum also exposes **Show Background**, **Show Rooms**, **Show Obstacles**, and **Show Robot** switches in the **Configuration** section of its Home Assistant device page. These settings are saved per device under `TOKEN_DIR` in `map_preferences.json`. The `MAP_SHOW_*` environment variables provide defaults for devices without saved overrides.
+
 ## Authentication
 
 shark2mqtt authenticates to SharkNinja's cloud using a browser-based Auth0 flow. The container runs a headed Chromium browser inside a virtual display (`xvfb`) to complete login automatically.
