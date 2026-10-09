@@ -191,6 +191,7 @@ async def poll_loop(
     floor_map_updated_at: dict[str, str] = {}
     floor_map_geometry: dict[str, dict[str, Any]] = {}
     floor_map_pose: dict[str, tuple[float, float, float] | None] = {}
+    floor_map_preferences: dict[str, tuple[tuple[str, bool], ...]] = {}
 
     while True:
         any_active = False
@@ -202,6 +203,8 @@ async def poll_loop(
             raw_devices = await api.get_all_devices()
             for raw in raw_devices:
                 device = SharkVacuum.from_skegox(raw)
+                map_options = mqtt.map_preferences(device.dsn)
+                map_options_signature = tuple(sorted(map_options.items()))
 
                 # Room source priority (issue #4):
                 # 1. Skegox MARD — authoritative for migrated devices,
@@ -248,21 +251,26 @@ async def poll_loop(
                                 device.dsn not in floor_map_pose
                                 or floor_map_pose[device.dsn] != pose
                             )
+                            preferences_changed = (
+                                floor_map_preferences.get(device.dsn)
+                                != map_options_signature
+                            )
 
-                            if geometry_changed or pose_changed:
+                            if geometry_changed or pose_changed or preferences_changed:
                                 render_geometry = geometry if geometry_changed else cached_geometry
                                 png = await visual_floor_map.render_floor_map_pillow(
                                     {**render_geometry, "pose": pose},
-                                    show_background=config.map_show_background,
-                                    show_zones=config.map_show_rooms,
-                                    show_boundaries=config.map_show_obstacles,
-                                    show_robot=config.map_show_robot,
+                                    show_background=map_options["background"],
+                                    show_zones=map_options["rooms"],
+                                    show_boundaries=map_options["obstacles"],
+                                    show_robot=map_options["robot"],
                                 )
                                 await mqtt.publish_map_image(
                                     device, png,
                                 )
                                 floor_map_geometry[device.dsn] = geometry
                                 floor_map_pose[device.dsn] = pose
+                                floor_map_preferences[device.dsn] = map_options_signature
                                 logger.info(
                                     "Published floor map image for %s (pose_changed=%s, "
                                     "geometry_changed=%s)",
@@ -287,21 +295,31 @@ async def poll_loop(
                 # poll on supported models, so publish whenever it moves
                 # even though the Visual_Floor_1 file itself is static.
                 live_pose = device.live_location
-
-                if (live_pose and device.dsn in floor_map_geometry) and (floor_map_pose.get(device.dsn) != live_pose):
+                pose_changed = (
+                    live_pose is not None
+                    and floor_map_pose.get(device.dsn) != live_pose
+                )
+                preferences_changed = (
+                    floor_map_preferences.get(device.dsn) != map_options_signature
+                )
+                if device.dsn in floor_map_geometry and (
+                    pose_changed or preferences_changed
+                ):
+                    pose = live_pose if live_pose is not None else floor_map_pose[device.dsn]
                     png = await visual_floor_map.render_floor_map_pillow(
-                        {**floor_map_geometry[device.dsn], "pose": live_pose},
-                        show_background=config.map_show_background,
-                        show_zones=config.map_show_rooms,
-                        show_boundaries=config.map_show_obstacles,
-                        show_robot=config.map_show_robot,
+                        {**floor_map_geometry[device.dsn], "pose": pose},
+                        show_background=map_options["background"],
+                        show_zones=map_options["rooms"],
+                        show_boundaries=map_options["obstacles"],
+                        show_robot=map_options["robot"],
                     )
                     try:
                         await mqtt.publish_map_image(
                             device,
                             png,
                         )
-                        floor_map_pose[device.dsn] = live_pose
+                        floor_map_pose[device.dsn] = pose
+                        floor_map_preferences[device.dsn] = map_options_signature
                     except (TypeError, ValueError, OSError, TimeoutError, aiomqtt.MqttError) as e:
                         logger.error(f"Failed to publish live pose for {device.product_name}: {e}")
 
@@ -393,8 +411,11 @@ async def poll_loop(
         try:
             await asyncio.wait_for(command_event.wait(), timeout=interval)
             command_event.clear()
-            logger.debug("Poll triggered early by command, waiting for device to update")
-            await asyncio.sleep(5)
+            if mqtt.consume_map_preferences_changed():
+                logger.debug("Poll triggered early by map preference change")
+            else:
+                logger.debug("Poll triggered early by command, waiting for device to update")
+                await asyncio.sleep(5)
         except TimeoutError:
             pass
 

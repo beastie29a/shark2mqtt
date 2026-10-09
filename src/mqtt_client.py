@@ -6,11 +6,13 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 import aiomqtt
 
 from .const import VERSION
+from .map_preferences import MAP_PREFERENCE_OPTIONS, MapPreferenceStore
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -44,6 +46,18 @@ class MqttClient:
         self._published_rooms: dict[str, set[str]] = {}  # device_id -> room slugs
         self._discovery_sigs: dict[str, str] = {}  # device_id -> last published signature
         self._migrated: set[str] = set()  # device_ids that got the one-time migrate_discovery signal
+        token_dir = getattr(config, "token_dir", "/data")
+        if not isinstance(token_dir, str):
+            token_dir = "/data"
+        defaults = {
+            key: value if type(value) is bool else True
+            for key, (setting, _, _) in MAP_PREFERENCE_OPTIONS.items()
+            if isinstance((value := getattr(config, setting, True)), bool)
+        }
+        self._map_preferences = MapPreferenceStore(
+            Path(token_dir) / "map_preferences.json", defaults
+        )
+        self._map_preferences_changed = False
 
     async def __aenter__(self) -> Self:
         will = aiomqtt.Will(
@@ -124,6 +138,12 @@ class MqttClient:
 
         payload = self._build_device_discovery_payload(device, uid, slug, topic)
         await self._publish(f"{HA_DISCOVERY_PREFIX}/device/{uid}/config", payload, retain=True)
+        for option, value in self.map_preferences(dsn).items():
+            await self._publish(
+                f"{topic}/map_options/{option}/state",
+                "ON" if value else "OFF",
+                retain=True,
+            )
 
         # Clean mode state publish (unchanged from the legacy path)
         if device.rooms:
@@ -325,6 +345,20 @@ class MqttClient:
             "image_topic": f"{topic}/map_image",
             "content_type": "image/png",
         }
+
+        for option, (_, name, icon) in MAP_PREFERENCE_OPTIONS.items():
+            cmps[f"map_{option}"] = {
+                "p": "switch",
+                "unique_id": f"{uid}_map_{option}",
+                "name": name,
+                "object_id": f"{slug}_map_{option}",
+                "command_topic": f"{topic}/map_options/{option}/set",
+                "state_topic": f"{topic}/map_options/{option}/state",
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "entity_category": "config",
+                "icon": icon,
+            }
 
         for room in device.rooms or []:
             room_slug = re.sub(r"[^a-z0-9]+", "_", room.lower()).strip("_")
@@ -923,6 +957,16 @@ class MqttClient:
         await self._client.publish(image_topic, png, qos=1, retain=True)
         logger.info("Published map image for %s (%d bytes)", dsn, len(png))
 
+    def map_preferences(self, dsn: str) -> dict[str, bool]:
+        """Return effective map visibility options for a device."""
+        return self._map_preferences.get(dsn)
+
+    def consume_map_preferences_changed(self) -> bool:
+        """Return and clear the pending map preference change flag."""
+        changed = self._map_preferences_changed
+        self._map_preferences_changed = False
+        return changed
+
     # --- Command handling ---
 
     async def command_listener(
@@ -945,6 +989,7 @@ class MqttClient:
         await self._client.subscribe(f"{self._prefix}/+/send_command")
         await self._client.subscribe(f"{self._prefix}/+/clean_room")
         await self._client.subscribe(f"{self._prefix}/+/clean_mode")
+        await self._client.subscribe(f"{self._prefix}/+/map_options/+/set")
 
         async for message in self._client.messages:
             topic = message.topic.value
@@ -995,6 +1040,30 @@ class MqttClient:
                         logger.info("Clean mode set to %s for %s", mode, device_id)
                     else:
                         logger.warning("Unknown clean mode: %s", mode)
+                elif "/map_options/" in topic and topic.endswith("/set"):
+                    option = topic.rsplit("/", 2)[-2]
+                    value = payload.strip().upper()
+                    if option not in MAP_PREFERENCE_OPTIONS:
+                        logger.warning("Unknown map preference: %s", option)
+                        continue
+                    if value not in ("ON", "OFF"):
+                        logger.warning("Invalid map preference state: %s", payload)
+                        continue
+                    changed = self._map_preferences.set(
+                        device_id, option, value == "ON"
+                    )
+                    await self._publish(
+                        f"{self._prefix}/{device_id}/map_options/{option}/state",
+                        value,
+                        retain=True,
+                    )
+                    self._map_preferences_changed |= changed
+                    logger.info(
+                        "Map preference %s set to %s for %s",
+                        option,
+                        value,
+                        device_id,
+                    )
                 if command_event is not None:
                     command_event.set()
             except Exception:

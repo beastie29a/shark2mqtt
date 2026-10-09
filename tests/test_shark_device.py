@@ -457,6 +457,12 @@ class TestDeviceDiscovery:
             and c.args[1] != {"migrate_discovery": True}
             for c in client._publish.call_args_list
         )
+        map_states = [
+            c for c in client._publish.call_args_list
+            if "/map_options/" in c.args[0] and c.args[0].endswith("/state")
+        ]
+        assert len(map_states) == 4
+        assert all(c.args[1] == "ON" and c.kwargs["retain"] for c in map_states)
 
     @pytest.mark.asyncio
     async def test_payload_root_blocks(self, client):
@@ -487,12 +493,19 @@ class TestDeviceDiscovery:
             "vacuum", "water_flow", "battery", "rssi", "charging", "error",
             "error_text", "evacuating", "warning", "dock_error", "runtime",
             "replace_battery", "recommend_randr", "error_trigger", "map",
+            "map_background", "map_rooms", "map_obstacles", "map_robot",
             "clean_kitchen", "clean_mode", "deep",
         }
         assert set(payload["cmps"]) == expected
         for name, cfg in payload["cmps"].items():
             assert cfg["p"], f"{name} missing platform"
             assert cfg["unique_id"], f"{name} missing unique_id"
+        for option in ("background", "rooms", "obstacles", "robot"):
+            cfg = payload["cmps"][f"map_{option}"]
+            assert cfg["entity_category"] == "config"
+            assert cfg["command_topic"].endswith(
+                f"/map_options/{option}/set"
+            )
         # Availability is root-level; no component carries it
         for name, cfg in payload["cmps"].items():
             assert "availability_topic" not in cfg, name
